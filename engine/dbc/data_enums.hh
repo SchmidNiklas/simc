@@ -609,6 +609,7 @@ enum property_type_t {
   P_RESOURCE_GEN        = 34,
   P_CHAIN_TARGET_RANGE  = 35,
   P_MAX_STACKS          = 37,
+  P_RESOURCE_COST_2     = 39,
   P_MAX
 };
 
@@ -1318,6 +1319,7 @@ enum spell_attribute : unsigned
   SX_DISABLE_PLAYER_HEALING_MULT    = 312u,
   SX_DISABLE_TARGET_POSITIVE_MULT   = 321u,
   SX_TARGET_SPECIFIC_COOLDOWN       = 330u,
+  SX_ROLLING_PERIODIC               = 334u,
   SX_SCALE_ILEVEL                   = 354u,
   SX_ONLY_PROC_FROM_CLASS_ABILITIES = 415u,
   SX_ALLOW_CLASS_ABILITY_PROCS      = 416u,

@@ -719,15 +719,17 @@ public:
   // Options
   struct demon_hunter_options_t
   {
-    // Override for target's hitbox size, relevant for Fel Rush and Vengeful Retreat.
-    double target_reach = -1.0;
     double initial_fury = 0;
-    int fodder_to_the_flame_kill_seconds = 4;
+    // Override for target's hitbox size, relevant for Fel Rush and Vengeful Retreat. -1.0 uses default SimC value.
+    double target_reach = -1.0;
+    // Relative directionality for movement events, 1.0 being directly away and 2.0 being perpendicular 
+    double movement_direction_factor = 1.8;
     // Chance to proc initiative off of the fodder demon (ie. not get damaged by it first)
-    // TODO: Determine a more realistic value
-    double fodder_to_the_flame_initiative_chance = 1;
+    double fodder_to_the_flame_initiative_chance = 0.85;
+    int fodder_to_the_flame_kill_seconds = 4;
     double darkglare_boon_cdr_high_roll_seconds = 18;
-    double soul_fragment_movement_consume_chance = 0.6;
+    // Chance of souls to be incidentally picked up on any movement ability due to being in pickup range
+    double soul_fragment_movement_consume_chance = 0.85;
   } options;
 
   demon_hunter_t( sim_t* sim, util::string_view name, race_e r );
@@ -963,8 +965,9 @@ bool movement_buff_t::trigger( int s, double v, double c, timespan_t d )
   else
   {
     // Calculate the number of yards away from melee this will send us.
-    // This is equal to twice the reach + melee range, assuming we are moving "across" the target
-    yards_from_melee = std::max(0.0, distance_moved - (dh->get_target_reach() + 5.0) * 2.0);
+    // This is equal to reach + melee range times the direction factor
+    // With 2.0 being moving fully "across" the target and 1.0 moving fully "away"
+    yards_from_melee = std::max( 0.0, distance_moved - ( ( dh->get_target_reach() + 5.0 ) * dh->options.movement_direction_factor ) );
   }
 
   if ( yards_from_melee > 0.0 )
@@ -1088,6 +1091,11 @@ struct soul_fragment_t
     double velocity = dh->spec.consume_soul_greater->missile_speed();
     if ( activation && consume_on_activation || velocity == 0 )
       return timespan_t::zero();
+
+    // 2023-06-26 -- Recent testing appears to show a roughly fixed 1s activation time
+    if ( activation )
+      return 1_s;
+
     double distance = get_distance( dh );
     return timespan_t::from_seconds( distance / velocity );
   }
@@ -1127,9 +1135,10 @@ struct soul_fragment_t
 
   void set_position()
   {
-    // Set base position: 15 yards to the front right or front left.
-    x = dh->x_position + ( dh->next_fragment_spawn % 2 ? -10.6066 : 10.6066 );
-    y = dh->y_position + 10.6066;
+    // Base position is up to 15 yards to the front right or front left for Vengeance, 9.5 yards for Havoc
+    const double distance = ( dh->specialization() == DEMON_HUNTER_HAVOC ) ? 4.6066 : 10.6066;
+    x = dh->x_position + ( dh->next_fragment_spawn % 2 ? -distance : distance );
+    y = dh->y_position + distance;
 
     // Calculate random offset, 2-5 yards from the base position.
     double r_min = 2.0;
@@ -2037,6 +2046,10 @@ struct consume_soul_t : public demon_hunter_heal_t
   {
     return calculate_heal( s );
   }
+
+  // Handled in the delayed consume event, not the heal action
+  timespan_t travel_time() const override
+  { return 0_s; }
 };
 
 // Fel Devastation ==========================================================
@@ -2886,8 +2899,17 @@ struct collective_anguish_t : public demon_hunter_spell_t
   }
 
   // Behaves as a channeled spell, although we can't set channeled = true since it is background
+  void init() override
+  {
+    demon_hunter_spell_t::init();
+
+    // Channeled dots get haste snapshotted in action_t::init() and we replicate that here
+    update_flags &= ~STATE_HASTE;
+  }
+
   timespan_t composite_dot_duration( const action_state_t* s ) const override
   {
+    // Replicate channeled action_t::composite_dot_duration() here
     return dot_duration * ( tick_time( s ) / base_tick_time );
   }
 };
@@ -3043,6 +3065,13 @@ struct immolation_aura_t : public demon_hunter_spell_t
 
     apply_affecting_aura(p->spec.immolation_aura_cdr);
 
+    if ( p->specialization() == DEMON_HUNTER_VENGEANCE )
+    {
+      energize_amount = data().effectN( 3 ).base_value();
+    } else {
+      energize_amount = data().effectN( 2 ).base_value();
+    }
+
     if ( !p->active.immolation_aura )
     {
       p->active.immolation_aura = p->get_background_action<immolation_aura_damage_t>(
@@ -3098,6 +3127,7 @@ struct metamorphosis_t : public demon_hunter_spell_t
   };
 
   double landing_distance;
+  timespan_t gcd_lag;
 
   metamorphosis_t( demon_hunter_t* p, util::string_view options_str )
     : demon_hunter_spell_t( "metamorphosis", p, p->spec.metamorphosis ),
@@ -3113,8 +3143,8 @@ struct metamorphosis_t : public demon_hunter_spell_t
     {
       base_teleport_distance  = data().max_range();
       movement_directionality = movement_direction_type::OMNI;
-      min_gcd                 = timespan_t::from_seconds( 1.0 );  // Cannot use skills during travel time
-      travel_speed            = 1.0;                              // Allows use in the precombat list
+      min_gcd                 = 1_s;  // Cannot use skills during travel time, adjusted below
+      travel_speed            = 1.0;  // Allows use in the precombat list
 
       // If we are landing outside of the impact radius, we don't need to assign the impact spell
       if ( landing_distance < 8.0 )
@@ -3129,11 +3159,20 @@ struct metamorphosis_t : public demon_hunter_spell_t
     }
   }
 
-  // leap travel time, independent of distance
+  // Meta leap travel time and self-pacify is a 1s hidden aura (201453) regardless of distance
+  // This is affected by aura lag and will slightly delay execution of follow-up attacks
+  // Not always relevant as GCD can be longer than the 1s + lag ability delay outside of lust
+  void schedule_execute( action_state_t* s ) override
+  {
+    gcd_lag = rng().gauss( sim->gcd_lag, sim->gcd_lag_stddev );
+    min_gcd = 1_s + gcd_lag;
+    demon_hunter_spell_t::schedule_execute( s );
+  }
+
   timespan_t travel_time() const override
   {
     if ( p()->specialization() == DEMON_HUNTER_HAVOC )
-      return timespan_t::from_seconds( 1.0 );
+      return min_gcd;
     else // DEMON_HUNTER_VENGEANCE
       return timespan_t::zero();
   }
@@ -3162,7 +3201,9 @@ struct metamorphosis_t : public demon_hunter_spell_t
         p()->cooldown.blade_dance->reset( false );
       }
 
+      // Cancel all previous movement events, as Metamorphosis is ground-targeted
       // If we are landing outside of point-blank range, trigger the movement buff
+      p()->set_out_of_range( timespan_t::zero() ); 
       if ( landing_distance > 0.0 )
       {
         p()->buff.metamorphosis_move->distance_moved = landing_distance;
@@ -3716,7 +3757,10 @@ struct the_hunt_t : public demon_hunter_spell_t
 
     p()->set_out_of_range( timespan_t::zero() ); // Cancel all other movement
 
-    p()->consume_nearby_soul_fragments( soul_fragment::LESSER );
+    if ( p()->specialization() != DEMON_HUNTER_VENGEANCE )
+    {
+      p()->consume_nearby_soul_fragments( soul_fragment::LESSER );
+    }
   }
 
   timespan_t travel_time() const override
@@ -4373,7 +4417,7 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
     }
 
     // Demonic Appetite
-    if ( p()->talent.havoc.demonic_appetite->ok() && p()->rppm.demonic_appetite->trigger() )
+    if ( !from_onslaught && p()->talent.havoc.demonic_appetite->ok() && p()->rppm.demonic_appetite->trigger() )
     {
       p()->proc.demonic_appetite->occur();
       p()->spawn_soul_fragment( soul_fragment::LESSER );
@@ -5295,7 +5339,10 @@ struct vengeful_retreat_t : public demon_hunter_spell_t
     p()->cooldown.movement_shared->start( timespan_t::from_seconds( 1.0 ) );
     p()->buff.vengeful_retreat_move->trigger();
 
-    p()->consume_nearby_soul_fragments( soul_fragment::LESSER );
+    if ( p()->specialization() != DEMON_HUNTER_VENGEANCE )
+    {
+      p()->consume_nearby_soul_fragments( soul_fragment::LESSER );
+    }
   }
 
   bool ready() override
@@ -5338,14 +5385,14 @@ struct soul_carver_t : public demon_hunter_attack_t
     if ( !result_is_hit( s->result ) )
       return;
 
-    p()->spawn_soul_fragment( soul_fragment::LESSER, data().effectN( 3 ).base_value() );
+    p()->spawn_soul_fragment( soul_fragment::LESSER, as<unsigned int>( data().effectN( 3 ).base_value() ) );
   }
 
   void tick( dot_t* d ) override
   {
     demon_hunter_attack_t::tick( d );
 
-    p()->spawn_soul_fragment( soul_fragment::LESSER, data().effectN( 4 ).base_value() );
+    p()->spawn_soul_fragment( soul_fragment::LESSER, as<unsigned int>( data().effectN( 4 ).base_value() ) );
   }
 };
 
@@ -6164,6 +6211,7 @@ void demon_hunter_t::create_options()
   player_t::create_options();
 
   add_option( opt_float( "target_reach", options.target_reach ) );
+  add_option( opt_float( "movement_direction_factor", options.movement_direction_factor, 1.0, 2.0 ) );
   add_option( opt_float( "initial_fury", options.initial_fury, 0.0, 120 ) );
   add_option( opt_int( "fodder_to_the_flame_kill_seconds", options.fodder_to_the_flame_kill_seconds, 0, 10 ) );
   add_option( opt_float( "fodder_to_the_flame_initiative_chance", options.fodder_to_the_flame_initiative_chance, 0, 1 ) );
@@ -7606,7 +7654,7 @@ void demon_hunter_t::adjust_movement()
     timespan_t remains = buff.out_of_range->remains();
     remains *= buff.out_of_range->check_value() / cache.run_speed();
 
-    set_out_of_range(remains);
+    set_out_of_range( remains );
   }
 }
 

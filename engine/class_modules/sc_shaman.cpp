@@ -1022,7 +1022,7 @@ struct maelstrom_weapon_buff_t : public buff_t
   maelstrom_weapon_buff_t( shaman_t* p ) :
     buff_t( p, "maelstrom_weapon", p->find_spell( 344179 ) ), shaman( p )
   {
-    set_max_stack( data().max_stacks() + p->talent.raging_maelstrom->effectN( 1 ).base_value() );
+    set_max_stack( data().max_stacks() + as<int>( p->talent.raging_maelstrom->effectN( 1 ).base_value() ) );
   }
 
   void increment( int stacks, double value, timespan_t duration ) override
@@ -1096,7 +1096,7 @@ struct cl_crash_lightning_buff_t : public buff_t
     int max_stack = data().max_stacks(); 
     if (p->talent.crashing_storms->ok())
     {
-      max_stack += p->talent.crashing_storms.spell()->effectN( 3 ).base_value();
+      max_stack += as<int>( p->talent.crashing_storms.spell()->effectN( 3 ).base_value() );
     }
 
     set_max_stack( max_stack );
@@ -3931,7 +3931,7 @@ struct stormstrike_base_t : public shaman_attack_t
     {
       make_event( sim, 0_s, [ this ]() {
         p()->generate_maelstrom_weapon( execute_state,
-          p()->talent.elemental_assault->effectN( 2 ).base_value() );
+                                        as<int>( p()->talent.elemental_assault->effectN( 2 ).base_value() ) );
       } );
     }
 
@@ -4544,7 +4544,7 @@ struct chain_lightning_overload_t : public chained_overload_base_t
 
     if ( p()->buff.surge_of_power->up() )
     {
-      t += p()->talent.surge_of_power->effectN( 4 ).base_value();
+      t += as<int>( p()->talent.surge_of_power->effectN( 4 ).base_value() );
     }
 
     return t;
@@ -4580,7 +4580,7 @@ struct lava_beam_overload_t : public chained_overload_base_t
 
     if ( p()->buff.surge_of_power->up() )
     {
-      t += p()->talent.surge_of_power->effectN( 4 ).base_value();
+      t += as<int>( p()->talent.surge_of_power->effectN( 4 ).base_value() );
     }
 
     return t;
@@ -4774,7 +4774,7 @@ struct chain_lightning_t : public chained_base_t
 
     if ( p()->buff.surge_of_power->up() )
     {
-      t += p()->talent.surge_of_power->effectN( 4 ).base_value();
+      t += as<int>( p()->talent.surge_of_power->effectN( 4 ).base_value() );
     }
 
     return t;
@@ -4924,7 +4924,7 @@ struct lava_beam_t : public chained_base_t
 
     if ( p()->buff.surge_of_power->up() )
     {
-      t += p()->talent.surge_of_power->effectN( 4 ).base_value();
+      t += as<int>( p()->talent.surge_of_power->effectN( 4 ).base_value() );
     }
 
     return t;
@@ -5991,7 +5991,7 @@ struct elemental_blast_t : public shaman_spell_t
     {
       if ( player->talent.elemental_blast.ok() && player->talent.lava_burst.ok() )
       {
-        cooldown->charges += player->find_spell( 394152 )->effectN( 2 ).base_value();
+        cooldown->charges += as<int>( player->find_spell( 394152 )->effectN( 2 ).base_value() );
       }
     }
   }
@@ -6979,7 +6979,7 @@ struct frost_shock_t : public shaman_spell_t
       // It looks like Frost Shock does not have the expected 1 baseline n_targets.
       // Spell data suggests Electrified Shocks adds 3 targets.
       // But the baseline target needs to be added, too.
-      t += 1 + p()->talent.electrified_shocks->effectN( 1 ).base_value();
+      t += 1 + as<int>( p()->talent.electrified_shocks->effectN( 1 ).base_value() );
     }
 
     return t;
@@ -8132,7 +8132,7 @@ struct primordial_wave_t : public shaman_spell_t
     if ( p()->talent.primal_maelstrom.ok() )
     {
       p()->generate_maelstrom_weapon( execute_state,
-                                    p()->talent.primal_maelstrom->effectN( 1 ).base_value() );
+                                      as<int>( p()->talent.primal_maelstrom->effectN( 1 ).base_value() ) );
     }
 
     if ( p()->talent.primordial_surge.ok() )
@@ -9912,7 +9912,7 @@ void shaman_t::trigger_splintered_elements( action_t* secondary )
 
   auto value = talent.splintered_elements->effectN( 1 ).percent();
 
-  buff.splintered_elements->trigger( count_duplicates, value );
+  buff.splintered_elements->trigger( as<int>( count_duplicates ), value );
 }
 
 void shaman_t::trigger_flash_of_lightning()
@@ -9982,7 +9982,7 @@ void shaman_t::trigger_swirling_maelstrom( const action_state_t* state )
     return;
   }
 
-  generate_maelstrom_weapon( state, talent.swirling_maelstrom->effectN( 1 ).base_value() );
+  generate_maelstrom_weapon( state, as<int>( talent.swirling_maelstrom->effectN( 1 ).base_value() ) );
 }
 
 void shaman_t::trigger_static_accumulation_refund( const action_state_t* state, int mw_stacks )
@@ -10147,7 +10147,7 @@ void shaman_t::create_buffs()
                                     ->set_refresh_behavior( buff_refresh_behavior::DURATION )
                                     ->set_tick_callback( [ this ]( buff_t* b, int, timespan_t ) {
                                       generate_maelstrom_weapon( action.feral_spirits,
-                                                               b->data().effectN( 1 ).base_value() );
+                                                               as<int>( b->data().effectN( 1 ).base_value() ) );
                                     } );
 
   buff.forceful_winds   = make_buff<buff_t>( this, "forceful_winds", find_spell( 262652 ) )
@@ -10212,12 +10212,12 @@ void shaman_t::create_buffs()
                             ->set_default_value_from_effect_type( A_ADD_PCT_MODIFIER, P_GENERIC )
                             ->set_max_stack(
                               talent.overflowing_maelstrom.ok()
-                              ? talent.overflowing_maelstrom->effectN( 1 ).base_value()
+                              ? as<int>( talent.overflowing_maelstrom->effectN( 1 ).base_value() )
                               : find_spell( 334196 )->max_stacks() );
   buff.static_accumulation = make_buff( this, "static_accumulation", find_spell( 384437 ) )
     ->set_default_value( talent.static_accumulation->effectN( 1 ).base_value() )
     ->set_tick_callback( [ this ]( buff_t* b, int, timespan_t ) {
-      generate_maelstrom_weapon( action.ascendance, b->value() );
+      generate_maelstrom_weapon( action.ascendance, as<int>( b->value() ) );
     } );
   buff.doom_winds = make_buff( this, "doom_winds", talent.doom_winds );
   buff.ice_strike = make_buff( this, "ice_strike", talent.ice_strike->effectN( 3 ).trigger() )
@@ -10838,9 +10838,10 @@ void shaman_t::init_action_list_enhancement()
     single->add_action( "primordial_wave,if=raid_event.adds.in>42|raid_event.adds.in<6" );
     single->add_action( "flame_shock,if=!ticking" );
     single->add_action( "lava_lash,if=talent.molten_assault.enabled&dot.flame_shock.refreshable" );
-    single->add_action( "ice_strike" );
+    single->add_action( "ice_strike,if=!buff.ice_strike.up" );
     single->add_action( "frost_shock,if=buff.hailstorm.up" );
     single->add_action( "lava_lash" );
+    single->add_action( "ice_strike" );
     single->add_action( "windstrike" );
     single->add_action( "stormstrike" );
     single->add_action( "sundering,if=raid_event.adds.in>=40" );
@@ -10865,10 +10866,10 @@ void shaman_t::init_action_list_enhancement()
     aoe->add_action( "crash_lightning,if=buff.doom_winds.up|!buff.crash_lightning.up|(talent.alpha_wolf.enabled&feral_spirit.active&alpha_wolf_min_remains=0)" );
     aoe->add_action( "sundering,if=buff.doom_winds.up|set_bonus.tier30_2pc" );
     aoe->add_action( "fire_nova,if=active_dot.flame_shock=6|(active_dot.flame_shock>=4&active_dot.flame_shock=active_enemies)" );
-    aoe->add_action( "ice_strike,if=talent.hailstorm.enabled" );
     aoe->add_action( "lava_lash,target_if=min:debuff.lashing_flames.remains,cycle_targets=1,if=talent.lashing_flames.enabled" );
+    aoe->add_action( "lava_lash,if=(talent.molten_assault.enabled&dot.flame_shock.ticking&(active_dot.flame_shock<active_enemies)&active_dot.flame_shock<6)|(talent.ashen_catalyst.enabled&buff.ashen_catalyst.stack=buff.ashen_catalyst.max_stack)");
+    aoe->add_action( "ice_strike,if=talent.hailstorm.enabled&!buff.ice_strike.up" );
     aoe->add_action( "frost_shock,if=talent.hailstorm.enabled&buff.hailstorm.up" );
-    aoe->add_action( "lava_lash,if=(talent.molten_assault.enabled&dot.flame_shock.ticking&(active_dot.flame_shock<active_enemies)&active_dot.flame_shock<6)|(talent.ashen_catalyst.enabled&buff.ashen_catalyst.stack=buff.ashen_catalyst.max_stack)" );
     aoe->add_action( "sundering" );
     aoe->add_action( "flame_shock,if=talent.molten_assault.enabled&!ticking" );
     aoe->add_action( "flame_shock,target_if=min:dot.flame_shock.remains,cycle_targets=1,if=(talent.fire_nova.enabled|talent.primordial_wave.enabled)&(active_dot.flame_shock<active_enemies)&active_dot.flame_shock<6" );

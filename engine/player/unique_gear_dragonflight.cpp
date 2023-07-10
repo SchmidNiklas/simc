@@ -18,6 +18,7 @@
 #include "player/action_priority_list.hpp"
 #include "player/action_variable.hpp"
 #include "player/pet.hpp"
+#include "player/pet_spawner.hpp"
 #include "sim/cooldown.hpp"
 #include "sim/real_ppm.hpp"
 #include "sim/sim.hpp"
@@ -4858,6 +4859,304 @@ void firecallers_focus( special_effect_t& e )
   new dbc_proc_callback_t( e.player, e );
 }
 
+// Mirror of Fractured Tomorrows
+// 418527 Driver, Buff and Value container
+// Effect 1-5, Buff Values
+// Effect 6, Sand Bolt value
+// Effect 7, Sand Cleave value
+// Effect 8, Sand Shield value
+// Effect 9, Restorative Sands Value
+// Effect 10, Auto Attack value
+// Melee DPS:
+// 208957 NPC ID
+// 419591 Auto Attack 
+// 418588 Sand Cleave
+// 418774 Summon Driver
+// Ranged DPS:
+// 208887 NPC ID
+// 418605 Sand Bolt Driver
+// 418607 Sand Bolt Damage
+// 418773 Summon Driver
+// Tank:
+// 208958 NPC ID
+// 418999 Sand Shield
+// 418775 Summon Driver
+// Heal:
+// 208959 NPC ID
+// 418605 Sand Bolt Driver
+// 418607 Sand Bolt Damage
+// 419052 Restorative Sands
+// 418776 Summon Driver
+// TODO: 
+// Check Tank Pet Auto Attack, as of 29-6-2023 was using default pet autos, scaling with player attack power.
+// Re-evaluate healer pet APL logic, may need to be adjusted up/down based on log data for raid.
+// Implement the cast start delay for Sand Bolt.
+void mirror_of_fractured_tomorrows( special_effect_t& e )
+{
+  if ( unique_gear::create_fallback_buffs(
+           e, { "mirror_of_fractured_tomorrows_crit_rating", "mirror_of_fractured_tomorrows_mastery_rating",
+                "mirror_of_fractured_tomorrows_haste_rating", "mirror_of_fractured_tomorrows_versatility_rating" } ) )
+    return;
+
+  struct future_self_auto_attack_t : public spell_t
+  {
+    action_t* action;
+    future_self_auto_attack_t( pet_t* p, const special_effect_t& e, action_t* a, util::string_view options_str )
+      : spell_t( "auto_attack", p, p->find_spell( 419591 ) ), action( a )
+    {
+      parse_options( options_str );
+      base_dd_min = base_dd_max = e.driver()->effectN( 10 ).average( e.item );
+      auto proxy                = action;
+      auto it                   = range::find( proxy->child_action, data().id(), &action_t::id );
+      if ( it != proxy->child_action.end() )
+        stats = ( *it )->stats;
+      else
+        proxy->add_child( this );
+    }
+  };
+
+  struct sand_cleave_t : public spell_t
+  {
+    action_t* action;
+    sand_cleave_t( pet_t* p, const special_effect_t& e, action_t* a, util::string_view options_str ) : spell_t( "sand_cleave", p, p->find_spell( 418588 ) ), action( a )
+    {
+      parse_options( options_str );
+      aoe = -1;
+      base_dd_min = base_dd_max = e.driver()->effectN( 7 ).average( e.item );
+      auto proxy                = action;
+      auto it                   = range::find( proxy->child_action, data().id(), &action_t::id );
+      if ( it != proxy->child_action.end() )
+        stats = ( *it )->stats;
+      else
+        proxy->add_child( this );
+    }
+  };
+
+  struct sand_shield_t : public spell_t
+  {
+    buff_t* shield;
+    action_t* action;
+    sand_shield_t( pet_t* p, const special_effect_t& e, action_t* a, util::string_view options_str )
+      : spell_t( "sand_shield", p, p->find_spell( 418999 ) ), shield( nullptr ), action( a )
+    {
+      parse_options( options_str );
+      auto proxy                = action;
+      auto it                   = range::find( proxy->child_action, data().id(), &action_t::id );
+      if ( it != proxy->child_action.end() )
+        stats = ( *it )->stats;
+      else
+        proxy->add_child( this );
+      auto shield_id = p->find_spell( 418999 );
+      shield         = create_buff<absorb_buff_t>( e.player, shield_id )
+                   ->set_default_value( e.driver()->effectN( 8 ).average( e.item ) );
+    }
+
+    void execute() override
+    {
+      spell_t::execute();
+      shield->trigger();
+    }
+  };
+
+  struct restorative_sands_t : public heal_t
+  {
+    action_t* action;
+    restorative_sands_t( pet_t* p, const special_effect_t& e, action_t* a, util::string_view options_str )
+      : heal_t( "restorative_sands", p, p->find_spell( 419052 ) ), action( a )
+    {
+      parse_options( options_str );
+      auto proxy                = action;
+      auto it                   = range::find( proxy->child_action, data().id(), &action_t::id );
+      if ( it != proxy->child_action.end() )
+        stats = ( *it )->stats;
+      else
+        proxy->add_child( this );
+      base_dd_min = base_dd_max = e.driver() -> effectN( 9 ).average( e.item );
+    }
+  };
+
+  struct sand_bolt_missile_t : public spell_t
+  {
+    action_t* action;
+    sand_bolt_missile_t( pet_t* p, const special_effect_t& e, action_t* a, util::string_view options_str )
+      : spell_t( "sand_bolt", p, p->find_spell( 418605 ) ), action( a )
+    {
+      parse_options( options_str );
+      auto proxy                = action;
+      auto it                   = range::find( proxy->child_action, data().id(), &action_t::id );
+      if ( it != proxy->child_action.end() )
+        stats = ( *it )->stats;
+      else
+        proxy->add_child( this );
+
+      auto damage = create_proc_action<generic_proc_t>( "sand_bolt_damage", p, "sand_bolt_damage", p->find_spell( 418607 ) );
+      damage -> base_dd_min = damage -> base_dd_max = e.driver()->effectN( 6 ).average( e.item );
+      damage -> stats = stats;
+      impact_action = damage;
+    }
+  };
+
+  struct future_self_pet_t : public pet_t
+  {
+    const special_effect_t& effect;
+    action_t* action;
+
+    future_self_pet_t( const special_effect_t& e, action_t* a )
+      : pet_t( e.player->sim, e.player, "future_self", true, true ), effect( e ), action( a )
+    {
+      unsigned pet_id;
+      switch ( e.player->role )
+      {
+        case ROLE_ATTACK:
+          pet_id = 208957;
+          break;
+        case ROLE_SPELL:
+          pet_id = 208887;
+          break;
+        case ROLE_TANK:
+          pet_id = 208958;
+          break;
+        case ROLE_HEAL:
+          pet_id = 208959;
+          break;
+        default:
+          return;
+      }
+
+      npc_id = pet_id;
+    }
+
+    void init_base_stats() override
+    {
+      pet_t::init_base_stats();
+    }
+
+    resource_e primary_resource() const override
+    {
+      return RESOURCE_NONE;
+    }
+
+    action_t* create_action( util::string_view name, util::string_view options ) override
+    {
+      if ( name == "auto_attack" )
+      {
+        return new future_self_auto_attack_t( this, effect, action, options );
+      }
+
+      if ( name == "sand_cleave" )
+      {
+        return new sand_cleave_t( this, effect, action, options );
+      }
+
+      if ( name == "sand_bolt" )
+      {
+        return new sand_bolt_missile_t( this, effect, action, options );
+      }
+
+      if ( name == "sand_shield" )
+      {
+        return new sand_shield_t( this, effect, action, options );
+      }
+
+      if ( name == "restorative_sands" )
+      {
+        return new restorative_sands_t( this, effect, action, options );
+      }
+
+      return pet_t::create_action( name, options );
+    }
+
+    void init_action_list() override
+    {
+      pet_t::init_action_list();
+
+      auto def = get_action_priority_list( "default" );
+      switch ( effect.player->role )
+      {
+        case ROLE_ATTACK:
+          def->add_action( "sand_cleave" );
+          def->add_action( "auto_attack" );
+          break;
+        case ROLE_SPELL:
+          def->add_action( "sand_bolt" );
+          break;
+        case ROLE_TANK:
+          def->add_action( "sand_shield" );
+          def->add_action( "auto_attack" );
+          break;
+        case ROLE_HEAL:
+          // Use APL logic to alternate between each spell, more properly emulating in game behavior
+          def->add_action( "sand_bolt,if=prev.restorative_sands" );
+          def->add_action( "restorative_sands" );
+          break;
+        default:
+          return;
+      }
+    }
+  };
+
+  struct mirror_of_fractured_tomorrows_t : public spell_t
+  {
+    spawner::pet_spawner_t<future_self_pet_t> spawner;
+    const special_effect_t& effect;
+    std::array<stat_e, 4> ratings;
+    std::shared_ptr<std::map<stat_e, buff_t*>> buffs;
+
+    mirror_of_fractured_tomorrows_t( const special_effect_t& e )
+      : spell_t( "mirror_of_fractured_tomorrows", e.player, e.driver() ),
+        spawner( "future_self", e.player, [ &e, this ]( player_t* ) { return new future_self_pet_t( e, this ); } ),
+        effect( e )
+    {
+      unsigned summon_driver;
+      switch ( e.player->role )
+      {
+        case ROLE_ATTACK:
+          summon_driver = 418774;
+          break;
+        case ROLE_SPELL:
+          summon_driver = 418773;
+          break;
+        case ROLE_TANK:
+          summon_driver = 418775;
+          break;
+        case ROLE_HEAL:
+          summon_driver = 418776;
+          break;
+        default:
+          return;
+      }
+      dual = false;
+      auto amount = e.driver()->effectN( 1 ).average( e.item );
+      buffs = std::make_shared<std::map<stat_e, buff_t*>>();
+      ratings = { STAT_VERSATILITY_RATING, STAT_MASTERY_RATING, STAT_HASTE_RATING, STAT_CRIT_RATING };
+
+      for ( auto stat : ratings )
+      {
+        auto name = std::string( "mirror_of_fractured_tomorrows_" ) + util::stat_type_string( stat );
+        auto buff = create_buff<stat_buff_t>( e.player, name, e.player->find_spell( 418527 ) )
+                    ->set_stat( stat, amount )
+                    ->set_name_reporting( util::stat_type_abbrev( stat ) );
+
+        ( *buffs )[ stat ] = buff;
+      }
+
+      spawner.set_default_duration( e.player->find_spell( summon_driver )->duration() );
+    }
+
+    void execute() override
+    {
+      spell_t::execute();
+      spawner.spawn();
+
+      stat_e max_stat = util::highest_stat( effect.player, ratings );
+      ( *buffs )[ max_stat ]->trigger();
+    }
+  };
+
+  e.disable_buff();
+  e.execute_action = create_proc_action<mirror_of_fractured_tomorrows_t>( "mirror_of_fractured_tomorrows", e );
+}
+
 // Weapons
 void bronzed_grip_wrappings( special_effect_t& effect )
 {
@@ -5771,7 +6070,14 @@ void voice_of_the_silent_star( special_effect_t& effect )
   effect.proc_flags_ = PF_ALL_DAMAGE;
   effect.proc_flags2_ = PF2_ALL_HIT;
 
-  new dbc_proc_callback_t( effect.player, effect );
+  if( effect.player -> dragonflight_opts.voice_of_the_silent_star_enable )
+  {
+    new dbc_proc_callback_t( effect.player, effect );
+  }
+  else
+  {
+    effect.type = SPECIAL_EFFECT_NONE;
+  }
 }
 
 // Shadowflame-Tempered Armor Patch
@@ -7033,6 +7339,7 @@ void register_special_effects()
   register_special_effect( 407512, items::heatbound_medallion );
   register_special_effect( 408625, items::fractured_crystalspine_quill );
   register_special_effect( 407523, items::firecallers_focus );
+  register_special_effect( 418527, items::mirror_of_fractured_tomorrows, true );
 
   // Weapons
   register_special_effect( 396442, items::bronzed_grip_wrappings );             // bronzed grip wrappings embellishment

@@ -79,6 +79,7 @@ struct expiation_t final : public priest_spell_t
     }
   }
 };
+
 // ==========================================================================
 // Mind Blast
 // ==========================================================================
@@ -111,6 +112,7 @@ public:
       child_expiation->background = true;
     }
 
+    // Extra charge of Mind Blast
     apply_affecting_aura( p.talents.shadow.thought_harvester );
   }
 
@@ -243,6 +245,7 @@ public:
     priest_spell_t::update_ready( cd_duration );
   }
 };
+
 // ==========================================================================
 // Angelic Feather
 // ==========================================================================
@@ -279,7 +282,6 @@ struct angelic_feather_t final : public priest_spell_t
 // ==========================================================================
 // Divine Star
 // Base Spell, used for both heal and damage spell.
-// TODO: add reduced healing beyond 6 targets
 // ==========================================================================
 struct divine_star_spell_t final : public priest_spell_t
 {
@@ -329,6 +331,8 @@ struct divine_star_heal_t final : public priest_heal_t
     : priest_heal_t( n, p, s ), return_spell( ( is_return_spell ? nullptr : new divine_star_heal_t( n, p, s, true ) ) )
   {
     aoe = -1;
+
+    reduced_aoe_targets = p.talents.divine_star->effectN( 1 ).base_value();
 
     proc = background = true;
   }
@@ -398,7 +402,6 @@ private:
 // ==========================================================================
 // Halo
 // Base Spell, used for both damage and heal spell.
-// TODO: add reduced healing beyond 5 targets
 // ==========================================================================
 struct halo_spell_t final : public priest_spell_t
 {
@@ -428,6 +431,8 @@ struct halo_heal_t final : public priest_heal_t
     radius       = data().max_range();
     range        = 0;
     travel_speed = 15;  // Rough estimate, 2021-01-03
+
+    reduced_aoe_targets = p.talents.halo->effectN( 1 ).base_value();
   }
 };
 
@@ -480,7 +485,16 @@ struct levitate_t final : public priest_spell_t
     : priest_spell_t( "levitate", p, p.find_class_spell( "Levitate" ) )
   {
     parse_options( options_str );
+
     ignore_false_positive = true;
+    harmful               = false;
+  }
+
+  void execute() override
+  {
+    priest_spell_t::execute();
+
+    priest().buffs.levitate->trigger();
   }
 };
 
@@ -504,7 +518,9 @@ struct power_word_fortitude_t final : public priest_spell_t
     priest_spell_t::execute();
 
     if ( !sim->overrides.power_word_fortitude )
+    {
       sim->auras.power_word_fortitude->trigger();
+    }
   }
 };
 
@@ -1143,7 +1159,7 @@ struct holy_nova_t final : public priest_spell_t
   {
     parse_options( options_str );
     aoe                 = -1;
-    full_amount_targets = priest().talents.holy_nova->effectN( 3 ).base_value();
+    full_amount_targets = as<int>( priest().talents.holy_nova->effectN( 3 ).base_value() );
     reduced_aoe_targets = priest().talents.holy_nova->effectN( 3 ).base_value();
   }
 
@@ -1389,6 +1405,17 @@ struct power_word_life_t final : public priest_heal_t
     {
       cooldown->adjust( timespan_t::from_seconds( data().effectN( 4 ).base_value() ) );
     }
+  }
+};
+
+struct essence_devourer_t final : public priest_heal_t
+{
+  essence_devourer_t( priest_t& p )
+    : priest_heal_t( "essence_devourer", p,
+                     p.talents.shadow.mindbender.enabled() ? p.talents.essence_devourer_mindbender
+                                                           : p.talents.essence_devourer_shadowfiend )
+  {
+    harmful = false;
   }
 };
 
@@ -1902,6 +1929,25 @@ double priest_t::composite_player_target_multiplier( player_t* t, school_e schoo
   return m;
 }
 
+double priest_t::composite_leech() const
+{
+  double l = player_t::composite_leech();
+
+  if ( talents.sanguine_teachings.enabled() )
+  {
+    auto amount = talents.sanguine_teachings->effectN( 1 ).percent();
+
+    if ( talents.sanlayn.enabled() )
+    {
+      amount += talents.sanlayn->effectN( 3 ).percent();
+    }
+
+    l += amount;
+  }
+
+  return l;
+}
+
 double priest_t::matching_gear_multiplier( attribute_e attr ) const
 {
   if ( attr == ATTR_INTELLECT )
@@ -2053,29 +2099,35 @@ void priest_t::init_base_stats()
 
 void priest_t::init_resources( bool force )
 {
-  // TODO: Use spelldata to make this less brittle when they tweak Insanity
-  if ( specialization() == PRIEST_SHADOW && resources.initial_opt[ RESOURCE_INSANITY ] <= 0 )
+  // Can perform pre-pull actions that are harmful without actually hitting the boss
+  // to build up Insanity before pulling
+  if ( ( specialization() == PRIEST_SHADOW ) && resources.initial_opt[ RESOURCE_INSANITY ] <= 0 &&
+       options.init_insanity )
   {
+    auto divine_star_insanity  = talents.divine_star->effectN( 3 ).resource( RESOURCE_INSANITY );
+    auto halo_insanity         = talents.halo->effectN( 2 ).resource( RESOURCE_INSANITY );
+    auto shadow_crash_insanity = talents.shadow.shadow_crash->effectN( 2 ).resource( RESOURCE_INSANITY );
+
     if ( talents.shadow.shadow_crash.enabled() )
     {
-      // Two Shadow Crash + Two Divine Star
+      // Two Shadow Crash + Two Divine Star == 24 Insanity
       if ( talents.divine_star.enabled() )
-        resources.initial_opt[ RESOURCE_INSANITY ] = 24;
-      // Two Shadow Crash + One Halo
+        resources.initial_opt[ RESOURCE_INSANITY ] = ( shadow_crash_insanity * 2 ) + ( divine_star_insanity * 2 );
+      // Two Shadow Crash + One Halo == 22 Insanity
       else if ( talents.halo.enabled() )
-        resources.initial_opt[ RESOURCE_INSANITY ] = 22;
+        resources.initial_opt[ RESOURCE_INSANITY ] = ( shadow_crash_insanity * 2 ) + halo_insanity;
       else
-        // Two Shadow Crash
-        resources.initial_opt[ RESOURCE_INSANITY ] = 12;
+        // Two Shadow Crash == 12 Insanity
+        resources.initial_opt[ RESOURCE_INSANITY ] = ( shadow_crash_insanity * 2 );
     }
     else
     {
-      // Three Divine Stars
+      // Three Divine Stars == 18 Insanity
       if ( talents.divine_star.enabled() )
-        resources.initial_opt[ RESOURCE_INSANITY ] = 18;
-      // One Halo
+        resources.initial_opt[ RESOURCE_INSANITY ] = ( divine_star_insanity * 3 );
+      // One Halo == 10 Insanity
       if ( talents.halo.enabled() )
-        resources.initial_opt[ RESOURCE_INSANITY ] = 10;
+        resources.initial_opt[ RESOURCE_INSANITY ] = halo_insanity;
     }
   }
 
@@ -2161,7 +2213,7 @@ void priest_t::init_spells()
   talents.move_with_grace    = CT( "Move With Grace" );  // NYI
   talents.power_infusion     = CT( "Power Infusion" );
   talents.vampiric_embrace   = CT( "Vampiric Embrace" );
-  talents.sanguine_teachings = CT( "Sanguine Teachings" );  // NYI
+  talents.sanguine_teachings = CT( "Sanguine Teachings" );
   talents.tithe_evasion      = CT( "Tithe Evasion" );
   // Row 6
   talents.inspiration                = CT( "Inspiration" );           // NYI
@@ -2169,7 +2221,7 @@ void priest_t::init_spells()
   talents.body_and_soul              = CT( "Body and Soul" );
   talents.twins_of_the_sun_priestess = CT( "Twins of the Sun Priestess" );
   talents.void_shield                = CT( "Void Shield" );
-  talents.sanlayn                    = CT( "San'layn" );  // TODO: Support working with Sanguine Teachings
+  talents.sanlayn                    = CT( "San'layn" );
   talents.apathy                     = CT( "Apathy" );
   // Row 7
   talents.unwavering_will = CT( "Unwavering Will" );
@@ -2199,9 +2251,16 @@ void priest_t::init_spells()
   talents.improved_fade          = CT( "Improved Fade" );
   talents.manipulation = CT( "Manipulation" );  // Spell data is not great here, actual/tooltip value is cut in half
   // Row 10
-  talents.power_word_life       = CT( "Power Word: Life" );
-  talents.angelic_bulwark       = CT( "Angelic Bulwark" );  // NYI
-  talents.void_shift            = CT( "Void Shift" );       // NYI
+  talents.benevolence      = CT( "Benevolence" );
+  talents.power_word_life  = CT( "Power Word: Life" );
+  talents.angelic_bulwark  = CT( "Angelic Bulwark" );  // NYI
+  talents.essence_devourer = CT( "Essence Devourer" );
+  if ( is_ptr() )
+  {
+    talents.essence_devourer_shadowfiend = find_spell( 415673 );  // actual healing spell for Shadowfiend
+    talents.essence_devourer_mindbender  = find_spell( 415676 );  // actual healing spell for Mindbender
+  }
+  talents.void_shift            = CT( "Void Shift" );  // NYI
   talents.shattered_perceptions = CT( "Shattered Perceptions" );
 }
 
@@ -2213,6 +2272,7 @@ void priest_t::create_buffs()
   buffs.desperate_prayer  = make_buff<buffs::desperate_prayer_t>( *this );
   buffs.power_word_shield = new buffs::power_word_shield_buff_t( this );
   buffs.fade              = make_buff( this, "fade", find_class_spell( "Fade" ) )->set_default_value_from_effect( 1 );
+  buffs.levitate          = make_buff( this, "levitate", find_spell( 111759 ) )->set_duration( timespan_t::zero() );
 
   // Shared talent buffs
   // Does not show damage value on the buff spelldata, that is only found on the talent
@@ -2262,8 +2322,11 @@ void priest_t::init_rng()
 
 void priest_t::init_background_actions()
 {
+  player_t::init_background_actions();
+
   background_actions.echoing_void        = new actions::spells::echoing_void_t( *this );
   background_actions.echoing_void_demise = new actions::spells::echoing_void_demise_t( *this );
+  background_actions.essence_devourer    = new actions::heals::essence_devourer_t( *this );
   init_background_actions_shadow();
   init_background_actions_discipline();
   init_background_actions_holy();
@@ -2282,8 +2345,11 @@ void priest_t::apply_affecting_auras( action_t& action )
   action.apply_affecting_aura( specs.holy_priest );
   action.apply_affecting_aura( specs.discipline_priest );
 
+  // Class Talents
+  action.apply_affecting_aura( talents.benevolence );
+
   // Shadow Talents
-  action.apply_affecting_aura( talents.shadow.malediction );
+  action.apply_affecting_aura( talents.shadow.malediction );  // Void Torrent CDR
   action.apply_affecting_aura( talents.shadow.mastermind );
   action.apply_affecting_aura( talents.shadow.mental_decay );
 
@@ -2451,32 +2517,17 @@ void priest_t::create_options()
 {
   base_t::create_options();
 
-  add_option( opt_bool( "priest.autounshift", options.autoUnshift ) );
-  add_option( opt_bool( "priest.fixed_time", options.fixed_time ) );
   add_option( opt_bool( "priest.mindgames_healing_reversal", options.mindgames_healing_reversal ) );
   add_option( opt_bool( "priest.mindgames_damage_reversal", options.mindgames_damage_reversal ) );
   add_option( opt_bool( "priest.self_power_infusion", options.self_power_infusion ) );
   // Default is 2, minimum of 1 bounce per second, maximum of 1 bounce per 12 seconds (prayer of mending's cooldown)
   add_option( opt_float( "priest.prayer_of_mending_bounce_rate", options.prayer_of_mending_bounce_rate, 1, 12 ) );
-  add_option( opt_bool( "priest.void_lasher_retarget", options.void_lasher_retarget ) );
+  add_option( opt_bool( "priest.init_insanity", options.init_insanity ) );
 }
 
 std::string priest_t::create_profile( save_e type )
 {
   std::string profile_str = base_t::create_profile( type );
-
-  if ( type & SAVE_PLAYER )
-  {
-    if ( !options.autoUnshift )
-    {
-      profile_str += fmt::format( "priest.autounshift={}\n", options.autoUnshift );
-    }
-
-    if ( !options.fixed_time )
-    {
-      profile_str += fmt::format( "priest.fixed_time={}\n", options.fixed_time );
-    }
-  }
 
   return profile_str;
 }
@@ -2505,6 +2556,14 @@ void priest_t::trigger_idol_of_cthun( action_state_t* s )
   {
     spawn_idol_of_cthun( s );
   }
+}
+
+void priest_t::trigger_essence_devourer()
+{
+  if ( !talents.essence_devourer.enabled() )
+    return;
+
+  background_actions.essence_devourer->execute();
 }
 
 void priest_t::spawn_idol_of_cthun( action_state_t* s )

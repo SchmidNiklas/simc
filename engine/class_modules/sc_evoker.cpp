@@ -114,6 +114,10 @@ struct evoker_t : public player_t
   // !!!===========================================================================!!!
   // !!! Runtime variables NOTE: these MUST be properly reset in evoker_t::reset() !!!
   // !!!===========================================================================!!!
+  vector_with_callback<player_t*> allies_with_my_ebon;
+  vector_with_callback<player_t*> allies_with_my_prescience;
+  mutable std::vector<buff_t*> allied_ebons_on_me;
+  player_t* last_scales_target;
   bool was_empowering;
   // !!!===========================================================================!!!
 
@@ -121,12 +125,8 @@ struct evoker_t : public player_t
 
   const special_effect_t* naszuro;
 
-  vector_with_callback<player_t*> allies_with_my_ebon;
   std::vector<evoker_t*> allied_augmentations;
-  mutable std::vector<buff_t*> allied_ebons_on_me;
   std::vector<std::function<void()>> allied_ebon_callbacks;
-  player_t* last_scales_target;
-  vector_with_callback<player_t*> allies_with_my_prescience;
 
   struct heartbeat_t
   {
@@ -210,13 +210,16 @@ struct evoker_t : public player_t
     const spell_data_t* augmentation;  // augmentation class aura
     const spell_data_t* mastery;       // Mastery Spell Data
 
+    const spell_data_t* tempered_scales;
+
     const spell_data_t* living_flame_damage;
     const spell_data_t* living_flame_heal;
+    const spell_data_t* energizing_flame;
 
     const spell_data_t* emerald_blossom;
     const spell_data_t* emerald_blossom_heal;
     const spell_data_t* emerald_blossom_spec;
-    
+
     // Augmentation
     const spell_data_t* close_as_clutchmates;
 
@@ -405,6 +408,7 @@ struct evoker_t : public player_t
   {
     propagate_const<gain_t*> eye_of_infinity;
     propagate_const<gain_t*> roar_of_exhilaration;
+    propagate_const<gain_t*> energizing_flame;
   } gain;
 
   // Procs
@@ -435,6 +439,7 @@ struct evoker_t : public player_t
   evoker_t( sim_t* sim, std::string_view name, race_e r = RACE_DRACTHYR_HORDE );
 
   // Character Definitions
+  unsigned int specialization_aura_id();
   void init_action_list() override;
   void init_finished() override;
   void init_base_stats() override;
@@ -481,7 +486,9 @@ struct evoker_t : public player_t
 
   // Stat & Multiplier overrides
   double matching_gear_multiplier( attribute_e ) const override;
+  double composite_base_armor_multiplier() const override;
   double composite_armor() const override;
+  double composite_base_armor() const;
   double composite_attribute_multiplier( attribute_e ) const override;
   double composite_player_multiplier( school_e ) const override;
   double composite_spell_haste() const override;
@@ -663,6 +670,144 @@ public:
   }
 };
 
+struct external_action_data
+{
+  evoker_t* evoker;
+};
+
+// Template for base external evoker action code.
+template <class Base>
+struct evoker_external_action_t : public Base
+{
+private:
+  using ab = Base;  // action base, spell_t/heal_t/etc.
+
+protected:
+  using state_t = evoker_action_state_t<external_action_data>;
+
+public:
+  evoker_t* evoker;
+
+  evoker_external_action_t( std::string_view name, player_t* player, const spell_data_t* spell = spell_data_t::nil() )
+    : ab( name, player, spell ), evoker( nullptr )
+  {
+  }
+
+  action_state_t* new_state() override
+  {
+    return new state_t( this, ab::target );
+  }
+
+  state_t* cast_state( action_state_t* s )
+  {
+    return static_cast<state_t*>( s );
+  }
+
+  const state_t* cast_state( const action_state_t* s ) const
+  {
+    return static_cast<const state_t*>( s );
+  }
+
+  double composite_crit_chance( const action_state_t* s ) const
+  {
+    return action_t::composite_crit_chance() + p( s )->cache.spell_crit_chance();
+  }
+
+  double composite_haste( const action_state_t* s ) const
+  {
+    return action_t::composite_haste() * p( s )->cache.spell_speed();
+  }
+
+  double composite_crit_chance_multiplier( const action_state_t* s ) const
+  {
+    return action_t::composite_crit_chance_multiplier() * p( s )->composite_spell_crit_chance_multiplier();
+  }
+
+  double composite_versatility( const action_state_t* s ) const override
+  {
+    return action_t::composite_versatility( s ) + p( s )->cache.damage_versatility();
+  }
+
+  double composite_attack_power( const action_state_t* s ) const
+  {
+    return p( s )->composite_melee_attack_power_by_type( ab::get_attack_power_type() );
+  }
+
+  double composite_spell_power( const action_state_t* s ) const
+  {
+    double spell_power = 0;
+    double tmp;
+
+    auto _player = p( s );
+
+    for ( auto base_school : ab::base_schools )
+    {
+      tmp = _player->cache.spell_power( base_school );
+      if ( tmp > spell_power )
+        spell_power = tmp;
+    }
+
+    return spell_power;
+  }
+
+  void snapshot_internal( action_state_t* state, unsigned flags, result_amount_type rt ) override
+  {
+    assert( state );
+
+    cast_state( state )->evoker = evoker;
+
+    assert( p( state ) );
+
+    ab::snapshot_internal( state, flags, rt );
+
+    if ( flags & STATE_CRIT )
+      state->crit_chance = composite_crit_chance( state ) * composite_crit_chance_multiplier( state );
+
+    if ( flags & STATE_HASTE )
+      state->haste = composite_haste( state );
+
+    if ( flags & STATE_AP )
+      state->attack_power = composite_attack_power( state ) * p( state )->composite_attack_power_multiplier();
+
+    if ( flags & STATE_SP )
+      state->spell_power = composite_spell_power( state ) * p( state )->composite_spell_power_multiplier();
+
+    if ( flags & STATE_VERSATILITY )
+      state->versatility = composite_versatility( state );
+  }
+
+  void snapshot_state( action_state_t* s, result_amount_type rt ) override
+  {
+    ab::snapshot_state( s, rt );
+    cast_state( s )->evoker = evoker;
+  }
+
+  evoker_t* p( action_state_t* s )
+  {
+    return cast_state( s )->evoker;
+  }
+
+  const evoker_t* p( const action_state_t* s ) const
+  {
+    return cast_state( s )->evoker;
+  }
+
+  evoker_td_t* td( action_state_t* s, player_t* t ) const
+  {
+    return p( s )->get_target_data( t );
+  }
+
+  const evoker_td_t* find_td( action_state_t* s, const player_t* t ) const
+  {
+    return p( s )->find_target_data( t );
+  }
+
+  double composite_spell_power() const override
+  {
+    return ab::composite_spell_power();
+  }
+};
+
 // Template for base evoker action code.
 template <class Base>
 struct evoker_action_t : public Base, public parse_buff_effects_t<evoker_td_t>
@@ -706,6 +851,47 @@ public:
       move_during_hover =
           player->find_spelleffect( player->find_class_spell( "Hover" ), A_CAST_WHILE_MOVING_WHITELIST, 0, &ab::data() )
               ->ok();
+
+      const auto spell_powers = ab::data().powers();
+      if ( spell_powers.size() == 1 && spell_powers.front().aura_id() == 0 )
+      {
+        ab::resource_current = spell_powers.front().resource();
+      }
+      else
+      {
+        // Find the first power entry without a aura id
+        auto it = range::find( spell_powers, 0U, &spellpower_data_t::aura_id );
+        if ( it != spell_powers.end() )
+        {
+          ab::resource_current = it->resource();
+        }
+        else
+        {
+          auto it = range::find( spell_powers, p()->specialization_aura_id(), &spellpower_data_t::aura_id );
+          if ( it != spell_powers.end() )
+          {
+            ab::resource_current = it->resource();
+          }
+        }
+      }
+
+      for ( const spellpower_data_t& pd : spell_powers )
+      {
+        if ( pd.aura_id() != 0 && pd.aura_id() != p()->specialization_aura_id() )
+          continue;
+
+        if ( pd._cost != 0 )
+          ab::base_costs[ pd.resource() ] = pd.cost();
+        else
+          ab::base_costs[ pd.resource() ] = floor( pd.cost() * p()->resources.base[ pd.resource() ] );
+
+        ab::secondary_costs[ pd.resource() ] = pd.max_cost();
+
+        if ( pd._cost_per_tick != 0 )
+          ab::base_costs_per_tick[ pd.resource() ] = pd.cost_per_tick();
+        else
+          ab::base_costs_per_tick[ pd.resource() ] = floor( pd.cost_per_tick() * p()->resources.base[ pd.resource() ] );
+      }
     }
   }
 
@@ -754,6 +940,25 @@ public:
     return move_during_hover && p()->buff.hover->check();
   }
 
+  
+  template <typename... Ts>
+  void parse_buff_effects_mods( buff_t* buff, const bfun& f, unsigned ignore_mask, bool use_stacks, bool use_default,
+                                Ts... mods )
+  {
+    if ( !buff )
+      return;
+
+    const spell_data_t* spell = &buff->data();
+
+    for ( size_t i = 1; i <= spell->effect_count(); i++ )
+    {
+      if ( ignore_mask & 1 << ( i - 1 ) )
+        continue;
+
+      parse_buff_effect( buff, f, spell, i, use_stacks, use_default, false, mods... );
+    }
+  }
+
   // Syntax: parse_buff_effects[<S[,S...]>]( buff[, ignore_mask|use_stacks[, use_default]][, spell1[,spell2...] )
   //  buff = buff to be checked for to see if effect applies
   //  ignore_mask = optional bitmask to skip effect# n corresponding to the n'th bit
@@ -772,7 +977,18 @@ public:
     parse_buff_effects( p()->buff.tip_the_scales );
 
     parse_buff_effects( p()->buff.imminent_destruction );
-    parse_buff_effects( p()->buff.ebon_might_self_buff, p()->sets->set( EVOKER_AUGMENTATION, T30, B2 ) );
+
+    if ( p()->specialization() == EVOKER_AUGMENTATION )
+    {
+      parse_buff_effects_mods(
+          p()->buff.ebon_might_self_buff, [ this ] { return p()->close_as_clutchmates; }, 0U, true, false,
+          p()->sets->set( EVOKER_AUGMENTATION, T30, B2 ), p()->spec.close_as_clutchmates );
+
+      parse_buff_effects_mods(
+          p()->buff.ebon_might_self_buff, [ this ] { return !p()->close_as_clutchmates; }, 0U, true, false,
+          p()->sets->set( EVOKER_AUGMENTATION, T30, B2 ) );
+    }
+
   }
 
   // Syntax: parse_dot_debuffs[<S[,S...]>]( func, spell_data_t* dot[, spell_data_t* spell1[,spell2...] )
@@ -790,6 +1006,9 @@ public:
 
   double cost() const override
   {
+    if ( ab::data().powers().size() > 1 && ab::current_resource() != ab::data().powers()[ 0 ].resource() )
+      return ab::cost();
+
     return std::max( 0.0, ( ab::cost() + get_buff_effects_value( flat_cost_buffeffects, true, false ) ) *
                               get_buff_effects_value( cost_buffeffects, false, false ) );
   }
@@ -877,7 +1096,7 @@ struct essence_base_t : public BASE
   {
     BASE::consume_resource();
 
-    if ( !BASE::base_cost() || BASE::proc )
+    if ( !BASE::base_cost() || BASE::proc || BASE::current_resource() != RESOURCE_ESSENCE )
       return;
 
     if ( BASE::p()->buff.essence_burst->up() )
@@ -953,15 +1172,12 @@ struct empowered_release_t : public empowered_base_t<BASE>
 {
   struct shifting_sands_t : public evoker_augment_t
   {
-    mutable std::vector<player_t*> secondary_targets;
-    mutable std::vector<player_t*> tertiary_targets;
-
     shifting_sands_t( evoker_t* p )
-      : evoker_augment_t( "shifting_sands", p, p->find_spell( 413984 ) ), secondary_targets(), tertiary_targets()
+      : evoker_augment_t( "shifting_sands", p, p->find_spell( 413984 ) )
     {
       background   = true;
       dot_duration = base_tick_time = 0_ms;
-      
+
       if ( aoe == 0 )
         aoe = 1;
     }
@@ -976,9 +1192,9 @@ struct empowered_release_t : public empowered_base_t<BASE>
 
     size_t available_targets( std::vector<player_t*>& target_list ) const override
     {
+      std::vector<player_t*> helper_list;
+
       target_list.clear();
-      secondary_targets.clear();
-      tertiary_targets.clear();
 
       if ( sim->player_no_pet_list.size() <= n_targets() )
       {
@@ -992,20 +1208,14 @@ struct empowered_release_t : public empowered_base_t<BASE>
       {
         if ( t != player )
         {
-          if ( t->role != ROLE_HYBRID && t->role != ROLE_HEAL && t->role != ROLE_TANK )
+          if ( t->role != ROLE_HYBRID && t->role != ROLE_HEAL && t->role != ROLE_TANK &&
+               p()->get_target_data( t )->buffs.ebon_might->check() && !p()->get_target_data( t )->buffs.shifting_sands->check() )
           {
-            if ( p()->get_target_data( t )->buffs.shifting_sands->up() )
-            {
-              tertiary_targets.push_back( t );
-            }
-            else
-            {
-              target_list.push_back( t );
-            }
+            target_list.push_back( t );
           }
           else
           {
-            secondary_targets.push_back( t );
+            helper_list.push_back( t );
           }
         }
       }
@@ -1018,34 +1228,45 @@ struct empowered_release_t : public empowered_base_t<BASE>
         }
         return target_list.size();
       }
+      
+      std::vector<std::function<bool( player_t* )>> lambdas = {
+          [ this ]( player_t* t ) {
+            return p()->get_target_data( t )->buffs.ebon_might->check() &&
+                   !p()->get_target_data( t )->buffs.shifting_sands->check();
+          },
+          [ this ]( player_t* t ) {
+            return t->role != ROLE_HYBRID && t->role != ROLE_HEAL && t->role != ROLE_TANK &&
+                   !p()->get_target_data( t )->buffs.shifting_sands->check();
+          },
+          [ this ]( player_t* t ) { return !p()->get_target_data( t )->buffs.shifting_sands->check(); },
+          [ this ]( player_t* t ) { return t->role != ROLE_HYBRID && t->role != ROLE_HEAL && t->role != ROLE_TANK; },
+          [ this ]( player_t* t ) { return true; } };
 
-      if ( secondary_targets.size() > 0 )
+      for ( auto& fn : lambdas )
       {
-        if ( as<int>( target_list.size() + secondary_targets.size() ) > n_targets() )
+        auto pos = target_list.size();
+
+        for ( size_t i = 0; i < helper_list.size(); )
         {
-          rng().shuffle( secondary_targets.begin(), secondary_targets.end() );
+          if ( fn( helper_list[ i ] ) )
+          {
+            target_list.push_back( helper_list[ i ] );
+            erase_unordered( helper_list, helper_list.begin() + i );
+          }
+          else
+          {
+            i++;
+          }
         }
 
-        for ( const auto& t : secondary_targets )
+        if ( as<int>( target_list.size() ) >= n_targets() )
         {
-          target_list.push_back( t );
-          if ( target_list.size() >= n_targets() )
-            return target_list.size();
-        }
-      }
+          if ( target_list.size() - pos > 1 )
+          {
+            rng().shuffle( target_list.begin() + pos + 1, target_list.end() );
+          }
 
-      if ( tertiary_targets.size() > 0 )
-      {
-        if ( as<int>( target_list.size() + tertiary_targets.size() ) > n_targets() )
-        {
-          rng().shuffle( tertiary_targets.begin(), tertiary_targets.end() );
-        }
-
-        for ( const auto& t : tertiary_targets )
-        {
-          target_list.push_back( t );
-          if ( target_list.size() >= n_targets() )
-            break;
+          return target_list.size();
         }
       }
 
@@ -1279,6 +1500,13 @@ struct empowered_charge_t : public empowered_base_t<BASE>
   {
     ab::last_tick( d );
 
+    // being stunned ends the empower without triggering the release spell
+    if ( ab::p()->buffs.stunned->check() )
+    {
+      ab::p()->was_empowering = false;
+      return;
+    }
+
     if ( empower_level( d ) == empower_e::EMPOWER_NONE || !validate_release_target( d ) )
     {
       ab::p()->was_empowering = false;
@@ -1438,6 +1666,56 @@ struct emerald_blossom_t : public essence_heal_t
         virtual_heal->execute_on_target( s->target );
       }
     }
+  }
+
+  void consume_resource() override
+  {
+    essence_heal_t::consume_resource();
+
+    resource_e prev_cr = current_resource();
+
+    if ( prev_cr == RESOURCE_MANA )
+      return;
+
+    resource_e cr = resource_current = RESOURCE_MANA;
+
+    if ( base_cost() == 0 || proc )
+      return;
+
+    last_resource_cost = cost();
+
+    player->resource_loss( cr, last_resource_cost, nullptr, this );
+
+    sim->print_log( "{} consumes {} {} for {} ({})", *player, last_resource_cost, cr, *this,
+                    player->resources.current[ cr ] );
+
+    stats->consume_resource( cr, last_resource_cost );
+
+    resource_current = prev_cr;
+  }
+
+  bool ready() override
+  {
+    if ( !essence_heal_t::ready() )
+      return false;
+
+    if ( resource_current == RESOURCE_MANA )
+      return true;
+
+    auto prev_resource = resource_current;
+    resource_current   = RESOURCE_MANA;
+
+    if ( !player->resource_available( RESOURCE_MANA, cost() ) )
+    {
+      if ( starved_proc )
+        starved_proc->occur();
+
+      resource_current = prev_resource;
+      return false;
+    }
+
+    resource_current = prev_resource;
+    return true;
   }
 
   void execute() override
@@ -1753,27 +2031,14 @@ public:
 
     if ( p()->buff.ebon_might_self_buff->check() )
     {
-      auto dur = p()->buff.ebon_might_self_buff->remains();
-      if ( dur < 20_s )
-      {
-        dur = std::min( 20_s - dur, extend );
-        if ( dur > 0_s )
-          p()->buff.ebon_might_self_buff->extend_duration( p(), dur );
-      }
+      p()->buff.ebon_might_self_buff->extend_duration( p(), extend );
     }
 
     for ( auto ally : p()->allies_with_my_ebon )
     {
       auto ebon = p()->get_target_data( ally )->buffs.ebon_might;
-      auto dur  = ebon->remains();
-      if ( dur < 20_s )
-      {
-        dur = std::min( 20_s - dur, extend );
-        if ( dur > 0_s )
-        {
-          ebon->extend_duration( p(), dur );
-        }
-      }
+
+      ebon->extend_duration( p(), extend );
     }
   }
 
@@ -1856,7 +2121,6 @@ public:
   {
     sim->print_debug( "{} before cast {} allies with prescience: {} allies with ebon: {} n_targets: {}", *p(), *this,
                       p()->allies_with_my_prescience.size(), p()->allies_with_my_ebon.size(), n_targets() );
-
 
     // Debug for Ebon Might - Need to check if there's a bug
     if ( sim->debug )
@@ -2024,52 +2288,6 @@ public:
 
 struct fire_breath_t : public empowered_charge_spell_t
 {
-  struct infernos_blessing_t : public evoker_spell_t
-  {
-  protected:
-    using state_t = evoker_action_state_t<stats_data_t>;
-
-  public:
-    infernos_blessing_t( evoker_t* p ) : evoker_spell_t( "infernos_blessing", p, p->talent.infernos_blessing_damage )
-    {
-      may_dodge = may_parry = may_block = false;
-      background                        = true;
-      spell_power_mod.direct            = 0.88;  // Hardcoded for some reason, 24/05/2023
-    }
-
-    action_state_t* new_state() override
-    {
-      return new state_t( this, target );
-    }
-
-    state_t* cast_state( action_state_t* s )
-    {
-      return static_cast<state_t*>( s );
-    }
-
-    const state_t* cast_state( const action_state_t* s ) const
-    {
-      return static_cast<const state_t*>( s );
-    }
-
-    void snapshot_state( action_state_t* s, result_amount_type rt ) override
-    {
-      evoker_spell_t::snapshot_state( s, rt );
-      cast_state( s )->stats = stats;
-    }
-
-    void record_data( action_state_t* data ) override
-    {
-      if ( !cast_state( data )->stats )
-        return;
-
-      cast_state( data )->stats->add_result(
-          data->result_amount, data->result_total, report_amount_type( data ), data->result,
-          ( may_block || player->position() != POSITION_BACK ) ? data->block_result : BLOCK_RESULT_UNKNOWN,
-          data->target );
-    }
-  };
-
   struct fire_breath_damage_t : public empowered_release_spell_t
   {
     timespan_t dot_dur_per_emp;
@@ -2175,12 +2393,6 @@ struct fire_breath_t : public empowered_charge_spell_t
     : base_t( "fire_breath", p, p->find_class_spell( "Fire Breath" ), options_str )
   {
     create_release_spell<fire_breath_damage_t>( "fire_breath_damage" );
-
-    if ( p->talent.infernos_blessing.ok() )
-    {
-      auto infernos_blessing = p->get_secondary_action<infernos_blessing_t>( "infernos_blessing" );
-      add_child( infernos_blessing );
-    }
   }
 };
 
@@ -2647,12 +2859,14 @@ struct living_flame_t : public evoker_spell_t
   double gcd_mul;
   bool cast_heal;
   timespan_t prepull_timespent;
+  double mana_return;
 
   living_flame_t( evoker_t* p, std::string_view options_str )
     : evoker_spell_t( "living_flame", p, p->find_class_spell( "Living Flame" ) ),
       gcd_mul( p->find_spelleffect( &p->buff.ancient_flame->data(), A_ADD_PCT_MODIFIER, P_GCD, &data() )->percent() ),
       cast_heal( false ),
-      prepull_timespent( timespan_t::zero() )
+      prepull_timespent( timespan_t::zero() ),
+      mana_return( p->spec.energizing_flame->effectN( 1 ).percent() )
   {
     damage        = p->get_secondary_action<living_flame_damage_t>( "living_flame_damage" );
     damage->stats = stats;
@@ -2662,6 +2876,19 @@ struct living_flame_t : public evoker_spell_t
 
     add_option( opt_bool( "heal", cast_heal ) );
     parse_options( options_str );
+
+    switch ( p->specialization() )
+    {
+      case EVOKER_DEVASTATION:
+        mana_return += p->spec.devastation->effectN( 9 ).percent();
+        break;
+      case EVOKER_AUGMENTATION:
+        mana_return += p->spec.augmentation->effectN( 9 ).percent();
+        break;
+      case EVOKER_PRESERVATION:
+      default:
+        break;
+    }
   }
 
   bool has_amount_result() const override
@@ -2691,12 +2918,20 @@ struct living_flame_t : public evoker_spell_t
   {
     evoker_spell_t::execute();
 
+    
+    auto cr = current_resource();
+
     // Single child, update children to parent action on each precombat execute
 
     if ( is_precombat )
     {
       debug_cast<living_flame_damage_t*>( damage )->prepull_timespent = prepull_timespent;
       debug_cast<living_flame_heal_t*>( heal )->prepull_timespent     = prepull_timespent;
+    }
+
+    if ( !cast_heal )
+    {
+      p()->resource_gain( RESOURCE_MANA, cost() * mana_return, p()->gain.energizing_flame, this );
     }
 
     damage->execute_on_target( target );
@@ -2723,7 +2958,7 @@ struct living_flame_t : public evoker_spell_t
             total_hits++;
       }
     }
-    
+
     // Make sure the buff is definitely gone.
     p()->buff.leaping_flames->expire();
 
@@ -3149,7 +3384,8 @@ struct eruption_t : public essence_spell_t
           -timespan_t::from_seconds( p()->talent.motes_of_possibility->effectN( 1 ).base_value() ) );
     }
 
-    if ( p()->talent.regenerative_chitin->ok() && p()->last_scales_target && p()->get_target_data( p()->last_scales_target )->buffs.blistering_scales->check() )
+    if ( p()->talent.regenerative_chitin->ok() && p()->last_scales_target &&
+         p()->get_target_data( p()->last_scales_target )->buffs.blistering_scales->check() )
     {
       p()->get_target_data( p()->last_scales_target )
           ->buffs.blistering_scales->bump( as<int>( p()->talent.regenerative_chitin->effectN( 3 ).base_value() ) );
@@ -3188,54 +3424,21 @@ struct upheaval_t : public empowered_charge_spell_t
   }
 };
 
-struct fate_mirror_damage_t : public evoker_spell_t
+struct fate_mirror_damage_t : public evoker_external_action_t<spell_t>
 {
 protected:
-  using state_t = evoker_action_state_t<stats_data_t>;
+  using base = evoker_external_action_t<spell_t>;
 
 public:
-  fate_mirror_damage_t( evoker_t* e ) : evoker_spell_t( "fate_mirror", e, e->talent.fate_mirror_damage )
+  fate_mirror_damage_t( player_t* p ) : base( "fate_mirror", p, p->find_spell( 404908 ) )
   {
     may_dodge = may_parry = may_block = may_crit = false;
     background                                   = true;
-    base_dd_multiplier                           = e->talent.fate_mirror->effectN( 1 ).percent();
   }
 
-  double composite_da_multiplier( const action_state_t* ) const override
+  double composite_da_multiplier( const action_state_t* s ) const override
   {
-    return base_dd_multiplier;
-  }
-
-  action_state_t* new_state() override
-  {
-    return new state_t( this, target );
-  }
-
-  state_t* cast_state( action_state_t* s )
-  {
-    return static_cast<state_t*>( s );
-  }
-
-  const state_t* cast_state( const action_state_t* s ) const
-  {
-    return static_cast<const state_t*>( s );
-  }
-
-  void snapshot_state( action_state_t* s, result_amount_type rt ) override
-  {
-    evoker_spell_t::snapshot_state( s, rt );
-    cast_state( s )->stats = stats;
-  }
-
-  void record_data( action_state_t* data ) override
-  {
-    if ( !cast_state( data )->stats )
-      return;
-
-    cast_state( data )->stats->add_result(
-        data->result_amount, data->result_total, report_amount_type( data ), data->result,
-        ( may_block || player->position() != POSITION_BACK ) ? data->block_result : BLOCK_RESULT_UNKNOWN,
-        data->target );
+    return cast_state( s )->evoker->talent.fate_mirror->effectN( 1 ).percent();
   }
 
   void init() override
@@ -3246,78 +3449,51 @@ public:
   }
 };
 
-struct breath_of_eons_damage_t : public spell_t
+
+struct infernos_blessing_t : public evoker_external_action_t<spell_t>
 {
 protected:
-  using state_t = evoker_action_state_t<stats_data_t>;
+  using base    = evoker_external_action_t<spell_t>;
 
 public:
-  double base_eons_multiplier        = 0.0;
-  double clutchmates_eons_multiplier = 0.0;
-  evoker_t* evoker;
+  infernos_blessing_t( player_t* p )
+    : base( "infernos_blessing", p, p->find_spell( 410265 ) )
+  {
+    may_dodge = may_parry = may_block = false;
+    background                        = true;
+    spell_power_mod.direct            = 0.88;  // Hardcoded for some reason, 24/05/2023
+  }
+};
 
-  breath_of_eons_damage_t( player_t* p, evoker_t* e )
-    : spell_t( "breath_of_eons_damage", p, e->talent.breath_of_eons_damage ), evoker( e )
+struct breath_of_eons_damage_t : public evoker_external_action_t<spell_t>
+{
+protected:
+  using base = evoker_external_action_t<spell_t>;
+
+public:
+  breath_of_eons_damage_t( player_t* p ) : base( "breath_of_eons_damage", p, p->find_spell( 409632 ) )
   {
     may_dodge = may_parry = may_block = false;
     background                        = true;
     base_crit += 1.0;
-    crit_bonus         = 0.0;
-    base_eons_multiplier = e->talent.temporal_wound->effectN( 1 ).percent();
-    clutchmates_eons_multiplier = base_eons_multiplier * ( 1 + e->spec.close_as_clutchmates->effectN( 1 ).percent() );
-
-    /* if ( p != e )
-    {
-      auto& vec = p->stats_list;
-
-      vec.erase( std::remove( vec.begin(), vec.end(), stats ), vec.end() );
-      delete stats;
-      stats = e->get_stats( name_str, this );
-    }*/
+    crit_bonus = 0.0;
   }
 
-  double composite_da_multiplier( const action_state_t* ) const override
+  double composite_da_multiplier( const action_state_t* s ) const override
   {
-    return evoker->close_as_clutchmates ? clutchmates_eons_multiplier : base_eons_multiplier;
-  }
+    double m = p( s )->talent.temporal_wound->effectN( 1 ).percent();
 
-  action_state_t* new_state() override
-  {
-    return new state_t( this, target );
-  }
+    if ( p( s )->close_as_clutchmates )
+      m *= 1 + p( s )->spec.close_as_clutchmates->effectN( 1 ).percent();
 
-  state_t* cast_state( action_state_t* s )
-  {
-    return static_cast<state_t*>( s );
-  }
-
-  const state_t* cast_state( const action_state_t* s ) const
-  {
-    return static_cast<const state_t*>( s );
-  }
-
-  void snapshot_state( action_state_t* s, result_amount_type rt ) override
-  {
-    spell_t::snapshot_state( s, rt );
-    cast_state( s )->stats = stats;
-  }
-
-  void record_data( action_state_t* data ) override
-  {
-    if ( !cast_state( data )->stats )
-      return;
-
-    cast_state( data )->stats->add_result(
-        data->result_amount, data->result_total, report_amount_type( data ), data->result,
-        ( may_block || player->position() != POSITION_BACK ) ? data->block_result : BLOCK_RESULT_UNKNOWN,
-        data->target );
+    return m;
   }
 
   void init() override
   {
     spell_t::init();
     snapshot_flags &= STATE_NO_MULTIPLIER;
-    snapshot_flags |= STATE_MUL_SPELL_DA | STATE_CRIT;
+    snapshot_flags |= STATE_MUL_SPELL_DA | STATE_CRIT | STATE_TGT_MUL_DA;
   }
 };
 
@@ -3329,8 +3505,6 @@ struct prescience_t : public evoker_augment_t
     : evoker_augment_t( "prescience", p, p->talent.prescience, options_str )
   {
     anachronism_chance = p->talent.anachronism->effectN( 1 ).percent();
-
-    add_child( p->get_secondary_action<fate_mirror_damage_t>( "fate_mirror" ) );
   }
 
   void impact( action_state_t* s ) override
@@ -3353,7 +3527,8 @@ struct prescience_t : public evoker_augment_t
   {
     // Do not ever do this out of precombat, the order of entries in allies with my prescience is not preserved. During
     // precombat we can guarantee the first entry is the first buff because we do not allow the sim to cast prescience
-    // if it would expire a prescience before the next cast, factoring in a gcds since you need time to make use of your spell.
+    // if it would expire a prescience before the next cast, factoring in a gcds since you need time to make use of your
+    // spell.
     if ( is_precombat )
       return p()->allies_with_my_prescience.empty() ||
              p()->get_target_data( p()->allies_with_my_prescience[ 0 ] )->buffs.prescience->remains() >
@@ -3374,14 +3549,15 @@ struct prescience_t : public evoker_augment_t
   }
 };
 
-struct blistering_scales_damage_t : public evoker_spell_t
+struct blistering_scales_damage_t : public evoker_external_action_t<spell_t>
 {
+private:
+  using base = evoker_external_action_t<spell_t>;
 protected:
   using state_t = evoker_action_state_t<stats_data_t>;
 
 public:
-  blistering_scales_damage_t( evoker_t* p )
-    : evoker_spell_t( "blistering_scales_damage", p, p->talent.blistering_scales_damage )
+  blistering_scales_damage_t( player_t* p ) : base( "blistering_scales_damage", p, p->find_spell( 360828 ) )
   {
     may_dodge = may_parry = may_block = false;
     background                        = true;
@@ -3389,77 +3565,20 @@ public:
     spell_power_mod.direct            = 0.3;  // Hardcoded for some reason, 19/05/2023
   }
 
-  void init() override
-  {
-    evoker_spell_t::init();
-  }
-
   double composite_da_multiplier( const action_state_t* s ) const override
   {
-    double da = evoker_spell_t::composite_da_multiplier( s );
-    da *= 1 + p()->buff.reactive_hide->check_stack_value();
+    double da = base::composite_da_multiplier( s );
+
+    da *= 1 + p( s )->buff.reactive_hide->check_stack_value();
     return da;
-  }
-
-  action_state_t* new_state() override
-  {
-    return new state_t( this, target );
-  }
-
-  state_t* cast_state( action_state_t* s )
-  {
-    return static_cast<state_t*>( s );
-  }
-
-  const state_t* cast_state( const action_state_t* s ) const
-  {
-    return static_cast<const state_t*>( s );
-  }
-
-  void snapshot_state( action_state_t* s, result_amount_type rt ) override
-  {
-    spell_t::snapshot_state( s, rt );
-    cast_state( s )->stats = stats;
-  }
-
-  void record_data( action_state_t* data ) override
-  {
-    if ( !cast_state( data )->stats )
-      return;
-
-    cast_state( data )->stats->add_result(
-        data->result_amount, data->result_total, report_amount_type( data ), data->result,
-        ( may_block || player->position() != POSITION_BACK ) ? data->block_result : BLOCK_RESULT_UNKNOWN,
-        data->target );
   }
 
   void execute() override
   {
-    evoker_spell_t::execute();
+    base::execute();
 
-    if ( p()->talent.reactive_hide.ok() )
-      p()->buff.reactive_hide->trigger();
-  }
-};
-
-struct blistering_scales_t : public evoker_augment_t
-{
-  blistering_scales_t( evoker_t* p, std::string_view options_str )
-    : evoker_augment_t( "blistering_scales", p, p->talent.blistering_scales, options_str )
-  {
-    add_child( p->get_secondary_action<blistering_scales_damage_t>( "blistering_scales" ) );
-  }
-
-  void impact( action_state_t* s ) override
-  {
-    evoker_augment_t::impact( s );
-
-    if ( p()->last_scales_target )
-        p()->get_target_data( p()->last_scales_target )->buffs.blistering_scales->expire();
-
-    p()->last_scales_target = s->target;
-
-    p()->get_target_data( s->target )->buffs.blistering_scales->trigger();
+    if ( p( execute_state )->talent.reactive_hide.ok() )
+      p( execute_state )->buff.reactive_hide->trigger();
   }
 };
 
@@ -3491,8 +3610,6 @@ struct breath_of_eons_t : public evoker_spell_t
     }
 
     plot_duration = timespan_t::from_seconds( p->talent.plot_the_future->effectN( 1 ).base_value() );
-
-    add_child( p->get_secondary_action<breath_of_eons_damage_t>( "breath_of_eons_damage", p ) );
   }
 
   void impact( action_state_t* s ) override
@@ -3577,15 +3694,16 @@ namespace buffs
 struct fate_mirror_cb_t : public dbc_proc_callback_t
 {
   evoker_t* source;
-  action_t* fate_mirror;
-  stats_t* stats;
+  spells::fate_mirror_damage_t* fate_mirror;
 
-  fate_mirror_cb_t( player_t* p, const special_effect_t& e, evoker_t* source, action_t* fate_mirror, stats_t* stats )
-    : dbc_proc_callback_t( p, e ), source( source ), fate_mirror( fate_mirror ), stats( stats )
+  fate_mirror_cb_t( player_t* p, const special_effect_t& e, evoker_t* source )
+    : dbc_proc_callback_t( p, e ), source( source )
   {
     allow_pet_procs = true;
     deactivate();
     initialize();
+
+    fate_mirror = debug_cast<spells::fate_mirror_damage_t*>( p->find_action( "fate_mirror" ) );
   }
 
   evoker_t* p()
@@ -3601,10 +3719,8 @@ struct fate_mirror_cb_t : public dbc_proc_callback_t
     double da = s->result_amount;
     if ( da > 0 )
     {
-      auto _stats        = fate_mirror->stats;
-      fate_mirror->stats = stats;
+      fate_mirror->evoker = source;
       fate_mirror->execute_on_target( s->target, da );
-      fate_mirror->stats = _stats;
     }
   }
 };
@@ -3612,70 +3728,167 @@ struct fate_mirror_cb_t : public dbc_proc_callback_t
 struct infernos_blessing_cb_t : public dbc_proc_callback_t
 {
   evoker_t* source;
-  action_t* infernos_blessing;
-  stats_t* stats;
+  spells::infernos_blessing_t* infernos_blessing;
 
-  infernos_blessing_cb_t( player_t* p, const special_effect_t& e, evoker_t* source, action_t* infernos_blessing,
-                          stats_t* stats )
-    : dbc_proc_callback_t( p, e ), source( source ), infernos_blessing( infernos_blessing ), stats( stats )
+  infernos_blessing_cb_t( player_t* p, const special_effect_t& e, evoker_t* source )
+    : dbc_proc_callback_t( p, e ), source( source )
   {
     allow_pet_procs = true;
     deactivate();
     initialize();
+
+    infernos_blessing = debug_cast<spells::infernos_blessing_t*>( p->find_action( "infernos_blessing" ) );
   }
 
   void execute( action_t*, action_state_t* s ) override
   {
-    if ( s->target->is_sleeping() )
+    if ( s->target->is_sleeping() || !infernos_blessing )
       return;
 
-    auto _stats              = infernos_blessing->stats;
-    infernos_blessing->stats = stats;
+    infernos_blessing->evoker = source;
     infernos_blessing->execute_on_target( s->target );
-    infernos_blessing->stats = _stats;
   }
 };
 
-struct blistering_scales_cb_t : public dbc_proc_callback_t
+
+struct blistering_scales_buff_t : public evoker_buff_t<buff_t>
 {
-  evoker_t* source;
-  action_t* blistering_scales;
-  stats_t* stats;
+private:
+  using bb = evoker_buff_t<buff_t>;
 
-  blistering_scales_cb_t( player_t* p, const special_effect_t& e, evoker_t* source, action_t* blistering_scales,
-                          stats_t* stats )
-    : dbc_proc_callback_t( p, e ), source( source ), blistering_scales( blistering_scales ), stats( stats )
+  dbc_proc_callback_t* cb;
+  stat_buff_t* armour;
+
+  struct blistering_scales_cb_t : public dbc_proc_callback_t
   {
-    allow_pet_procs = true;
-    deactivate();
-    initialize();   
+    evoker_t* source;
+    spells::blistering_scales_damage_t* blistering_scales;
+    stats_t* stats;
+
+    blistering_scales_cb_t( player_t* p, const special_effect_t& e, evoker_t* source )
+      : dbc_proc_callback_t( p, e ), source( source )
+    {
+      allow_pet_procs = true;
+      deactivate();
+      initialize();
+
+      blistering_scales =
+          debug_cast<spells::blistering_scales_damage_t*>( p->find_action( "blistering_scales_damage" ) );
+    }
+
+    evoker_t* p()
+    {
+      return source;
+    }
+
+    void execute( action_t*, action_state_t* s ) override
+    {
+      if ( s->target->is_sleeping() )
+        return;
+
+      p()->get_target_data( s->target )->buffs.blistering_scales->decrement();
+
+      p()->sim->print_debug( "{}'s blistering scales detonates for action {} from {} targeting {}", *p(), *s->action,
+                             *s->action->player, *s->target );
+
+      blistering_scales->evoker = source;
+      blistering_scales->execute_on_target( s->action->player );
+    }
+  };
+
+  struct blistering_scales_armour_buff_t : evoker_buff_t<stat_buff_t>
+  {
+    blistering_scales_armour_buff_t( evoker_td_t& td, util::string_view name, const spell_data_t* s ) 
+        : evoker_buff_t<stat_buff_t>( td, std::string( name ) + "_armour", s )
+    {
+      add_stat( STAT_BONUS_ARMOR, p()->composite_base_armor() * p()->talent.blistering_scales->effectN( 2 ).percent() );
+      set_duration( 0_s );
+      set_cooldown( 0_s );
+      set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT );
+      set_max_stack( 1 );
+    }
+  };
+
+public:
+
+  blistering_scales_buff_t( evoker_td_t& td, util::string_view name, const spell_data_t* s )
+    : bb( td, name, s )
+  {
+    auto blistering_scales_effect          = new special_effect_t( td.target );
+    blistering_scales_effect->name_str     = "blistering_scales_" + p()->name_str;
+    blistering_scales_effect->type         = SPECIAL_EFFECT_EQUIP;
+    blistering_scales_effect->spell_id     = p()->talent.blistering_scales->id();
+    blistering_scales_effect->proc_flags2_ = PF2_ALL_HIT;
+    blistering_scales_effect->cooldown_    = 2_s;  // Tested 27 / 05 / 2023
+    td.target->special_effects.push_back( blistering_scales_effect );
+
+    cb = new blistering_scales_cb_t( td.target, *blistering_scales_effect, p() );
+
+    armour = new blistering_scales_armour_buff_t( td, name, s );
+
+    apply_affecting_aura( p()->talent.regenerative_chitin );
+    set_cooldown( 0_s );
+    set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT );
+    set_stack_change_callback( [ this ]( buff_t*, int, int new_ ) {
+      if ( new_ )
+      {
+        cb->activate();
+        armour->trigger();
+      }
+      else if ( !new_ )
+      {
+        cb->deactivate();
+        armour->expire();
+      }
+    } );
+  }
+    
+  void update_stat( stat_buff_t* b, double amount )
+  {
+    if ( b->check() && b->stats[ 0 ].amount != amount )
+    {
+      b->stats[ 0 ].amount = amount;
+      adjust_stats( b );
+    }
   }
 
-  evoker_t* p()
+  double calc_armour()
   {
-    return source;
+    return p()->composite_base_armor() * p()->talent.blistering_scales->effectN( 2 ).percent();
   }
 
-  void execute( action_t*, action_state_t* s ) override
+  void adjust_stats( stat_buff_t* b )
   {
-    if ( s->target->is_sleeping() )
-      return;
+    for ( auto& buff_stat : b->stats )
+    {
+      if ( buff_stat.check_func && !buff_stat.check_func( *b ) )
+        continue;
 
-    p()->get_target_data( s->target )->buffs.blistering_scales->decrement();
+      double delta = buff_stat.stack_amount( b->current_stack ) - buff_stat.current_value;
+      if ( delta > 0 )
+      {
+        b->player->stat_gain( buff_stat.stat, delta, b->stat_gain, nullptr, b->buff_duration() > timespan_t::zero() );
+      }
+      else if ( delta < 0 )
+      {
+        b->player->stat_loss( buff_stat.stat, std::fabs( delta ), b->stat_gain, nullptr,
+                              b->buff_duration() > timespan_t::zero() );
+      }
 
-    p()->sim->print_debug( "{}'s blistering scales detonates for action {} from {} targeting {}", *p(), *s->action,
-                           *s->action->player, *s->target );
-
-    auto _stats              = blistering_scales->stats;
-    blistering_scales->stats = stats;
-    blistering_scales->execute_on_target( s->action->player );
-    blistering_scales->stats = _stats;
+      buff_stat.current_value += delta;
+    }
   }
+
+  void update_armour_buff()
+  {
+    update_stat( armour, calc_armour() );
+  }
+
 };
 
 struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
 {
-  action_t* eon_damage;
+  target_specific_t<spells::breath_of_eons_damage_t> eon_actions;
   std::map<size_t, double> eon_stored;
   dbc_proc_callback_t* cb;
 
@@ -3700,7 +3913,8 @@ struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
         if ( this->p() == s->action->player )
           return static_cast<bool>( this->p()->buff.ebon_might_self_buff->check() );
 
-        return static_cast<bool>( this->p()->get_target_data( s->action->player->get_owner_or_self() )->buffs.ebon_might->check() );
+        return static_cast<bool>(
+            this->p()->get_target_data( s->action->player->get_owner_or_self() )->buffs.ebon_might->check() );
       };
 
       trig = std::make_unique<dbc_proc_callback_t::trigger_fn_t>( lambda );
@@ -3740,10 +3954,9 @@ struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
   };
 
   temporal_wound_buff_t( evoker_td_t& td, util::string_view name, const spell_data_t* s )
-    : evoker_buff_t<buff_t>( td, name, s )
+    : evoker_buff_t<buff_t>( td, name, s ), eon_actions{ false }
   {
     buff_period = 0_s;
-    eon_damage  = p()->get_secondary_action<spells::breath_of_eons_damage_t>( "breath_of_eons_damage", p() );
 
     auto temporal_wound_effect      = new special_effect_t( p() );
     temporal_wound_effect->name_str = "temporal_wound_" + p()->name_str;
@@ -3759,6 +3972,7 @@ struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
     return p->actor_index;
   }
 
+  // TODO: Stop using PID and just use the pointers.
   player_t* player_from_id( size_t i )
   {
     return sim->actor_list[ i ];
@@ -3775,6 +3989,17 @@ struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
     return true;
   }
 
+  spells::breath_of_eons_damage_t* get_eon_action( const player_t* target )
+  {
+    if ( eon_actions[ target ] != nullptr )
+      return eon_actions[ target ];
+
+    eon_actions[ target ] = debug_cast<spells::breath_of_eons_damage_t*>( target->find_action( "breath_of_eons_damage" ) );
+
+    return eon_actions[ target ];
+  }
+
+
   void expire_override( int expiration_stacks, timespan_t remaining_duration ) override
   {
     buff_t::expire_override( expiration_stacks, remaining_duration );
@@ -3782,20 +4007,48 @@ struct temporal_wound_buff_t : public evoker_buff_t<buff_t>
     if ( cb )
       cb->deactivate();
 
-    auto stats = eon_damage->stats;
     for ( auto& [ pid, damage ] : eon_stored )
     {
-      auto pp           = player_from_id( pid );
-      eon_damage->stats = p()->get_stats( "eon_damage_" + pp->name_str, eon_damage );
+      auto pp            = player_from_id( pid );
+      auto eon_damage    = get_eon_action( pp );
+      eon_damage->evoker = p();
       sim->print_debug( "{} eon helper expiry, player {}s, size {}, damage execution inc, executing on {}", *source,
                         *pp, damage, *player );
       eon_damage->execute_on_target( player, damage );
     }
-    eon_damage->stats = stats;
     eon_stored.clear();
   }
 };
 }  // namespace buffs
+
+// Namespace spells again
+namespace spells
+{
+
+struct blistering_scales_t : public evoker_augment_t
+{
+  blistering_scales_t( evoker_t* p, std::string_view options_str )
+    : evoker_augment_t( "blistering_scales", p, p->talent.blistering_scales, options_str )
+  {
+  }
+
+  void impact( action_state_t* s ) override
+  {
+    evoker_augment_t::impact( s );
+
+    if ( p()->last_scales_target )
+      p()->get_target_data( p()->last_scales_target )->buffs.blistering_scales->expire();
+
+    p()->last_scales_target = s->target;
+
+    p()->get_target_data( s->target )->buffs.blistering_scales->trigger();
+
+    debug_cast<buffs::blistering_scales_buff_t*>( p()->get_target_data( s->target )->buffs.blistering_scales )
+        ->update_armour_buff();
+  }
+};
+
+}  // namespace spells
 
 // ==========================================================================
 // Evoker Character Definitions
@@ -3844,11 +4097,11 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
       {
         buffs.unbound_surge->set_tick_callback( [ _target, evoker ]( buff_t* b, int s, timespan_t t ) {
           {
-            if ( t > 0_s && !_target->buff.dragonrage->check() &&
+            if ( b->remains() > 0_s && !_target->buff.dragonrage->check() &&
                  _target->rng().roll( evoker->option.naszuro_bounce_chance ) )
               make_event( _target->sim, [ _target, evoker, b, t ] {
+                evoker->bounce_naszuro( _target, b->remains() );
                 b->expire();
-                evoker->bounce_naszuro( _target, t );
               } );
           }
         } );
@@ -3857,10 +4110,10 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
       {
         buffs.unbound_surge->set_tick_callback( [ target, evoker ]( buff_t* b, int s, timespan_t t ) {
           {
-            if ( t > 0_s && target->rng().roll( evoker->option.naszuro_bounce_chance ) )
+            if ( b->remains() > 0_s && target->rng().roll( evoker->option.naszuro_bounce_chance ) )
               make_event( target->sim, [ target, evoker, b, t ] {
+                evoker->bounce_naszuro( target, b->remains() );
                 b->expire();
-                evoker->bounce_naszuro( target, t );
               } );
           }
         } );
@@ -3878,17 +4131,6 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
       {
         debuffs.temporal_wound =
             make_buff<buffs::temporal_wound_buff_t>( *this, "temporal_wound", evoker->talent.temporal_wound );
-      }
-      else
-      {
-        if ( !target->is_pet() )
-        {
-          action_t* eon_damage =
-              evoker->get_secondary_action<spells::breath_of_eons_damage_t>( "breath_of_eons_damage", evoker );
-          auto stats    = evoker->get_stats( "eon_damage_" + target->name_str, eon_damage );
-          stats->school = eon_damage->get_school();
-          eon_damage->stats->add_child( stats );
-        }
       }
     }
 
@@ -3938,19 +4180,13 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
 
       if ( evoker->talent.fate_mirror.ok() )
       {
-        action_t* fate_mirror = evoker->get_secondary_action<spells::fate_mirror_damage_t>( "fate_mirror" );
-        auto stats            = evoker->get_stats( "fate_mirror_" + target->name_str, fate_mirror );
-        stats->school         = fate_mirror->get_school();
-
-        fate_mirror->stats->add_child( stats );
-
         auto fate_mirror_effect      = new special_effect_t( target );
         fate_mirror_effect->name_str = "fate_mirror_" + evoker->name_str;
         fate_mirror_effect->type     = SPECIAL_EFFECT_EQUIP;
         fate_mirror_effect->spell_id = evoker->talent.prescience_buff->id();
         target->special_effects.push_back( fate_mirror_effect );
 
-        auto fate_mirror_cb = new buffs::fate_mirror_cb_t( target, *fate_mirror_effect, evoker, fate_mirror, stats );
+        auto fate_mirror_cb = new buffs::fate_mirror_cb_t( target, *fate_mirror_effect, evoker );
 
         buffs.prescience->set_stack_change_callback( [ fate_mirror_cb, target, evoker ]( buff_t*, int, int new_ ) {
           if ( new_ )
@@ -3981,49 +4217,14 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
 
       if ( evoker->talent.blistering_scales )
       {
-        action_t* blistering_scales =
-            evoker->get_secondary_action<spells::blistering_scales_damage_t>( "blistering_scales_damage" );
-        auto stats    = evoker->get_stats( "blistering_scales_" + target->name_str, blistering_scales );
-        stats->school = blistering_scales->get_school();
-
-        blistering_scales->stats->add_child( stats );
-
-        auto blistering_scales_effect          = new special_effect_t( target );
-        blistering_scales_effect->name_str     = "blistering_scales_" + evoker->name_str;
-        blistering_scales_effect->type         = SPECIAL_EFFECT_EQUIP;
-        blistering_scales_effect->spell_id     = evoker->talent.blistering_scales->id();
-        blistering_scales_effect->proc_flags2_ = PF2_ALL_HIT;
-        blistering_scales_effect->cooldown_    = 2_s;  // Tested 27 / 05 / 2023
-        target->special_effects.push_back( blistering_scales_effect );
-
-        auto blistering_scales_cb =
-            new buffs::blistering_scales_cb_t( target, *blistering_scales_effect, evoker, blistering_scales, stats );
-
-        buffs.blistering_scales = make_buff<e_buff_t>( *this, "blistering_scales", evoker->talent.blistering_scales )
-                                      ->apply_affecting_aura( evoker->talent.regenerative_chitin )
-                                      ->set_cooldown( 0_s )
-                                      ->set_constant_behavior( buff_constant_behavior::NEVER_CONSTANT )
-                                      ->set_stack_change_callback( [ blistering_scales_cb ]( buff_t*, int, int new_ ) {
-                                        if ( new_ )
-                                          blistering_scales_cb->activate();
-                                        else if ( !new_ )
-                                          blistering_scales_cb->deactivate();
-                                      } );
+        buffs.blistering_scales = make_buff<buffs::blistering_scales_buff_t>(
+            *this, "blistering_scales_" + evoker->name_str, evoker->talent.blistering_scales );
       }
-
 
       if ( evoker->talent.infernos_blessing.ok() )
       {
         buffs.infernos_blessing =
             make_buff<e_buff_t>( *this, "infernos_blessing", evoker->talent.infernos_blessing_buff );
-
-        action_t* infernos_blessing =
-            evoker->get_secondary_action<spells::fire_breath_t::infernos_blessing_t>( "infernos_blessing" );
-
-        auto stats    = evoker->get_stats( "infernos_blessing_" + target->name_str, infernos_blessing );
-        stats->school = infernos_blessing->get_school();
-
-        infernos_blessing->stats->add_child( stats );
 
         auto infernos_blessing_effect      = new special_effect_t( target );
         infernos_blessing_effect->name_str = "infernos_blessing_" + target->name_str;
@@ -4032,7 +4233,7 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
         target->special_effects.push_back( infernos_blessing_effect );
 
         auto infernos_blessing_cb =
-            new buffs::infernos_blessing_cb_t( target, *infernos_blessing_effect, evoker, infernos_blessing, stats );
+            new buffs::infernos_blessing_cb_t( target, *infernos_blessing_effect, evoker );
 
         buffs.infernos_blessing->set_stack_change_callback( [ infernos_blessing_cb ]( buff_t*, int, int new_ ) {
           if ( new_ )
@@ -4047,7 +4248,16 @@ evoker_td_t::evoker_td_t( player_t* target, evoker_t* evoker )
 
 evoker_t::evoker_t( sim_t* sim, std::string_view name, race_e r )
   : player_t( sim, EVOKER, name, r ),
+    allies_with_my_ebon(),
+    allies_with_my_prescience(),
+    allied_ebons_on_me(),
+    last_scales_target( nullptr ),
     was_empowering( false ),
+    naszuro(),
+    allied_augmentations(),
+    allied_ebon_callbacks(),
+    heartbeat(),
+    close_as_clutchmates( false ),
     option(),
     action(),
     buff(),
@@ -4058,16 +4268,7 @@ evoker_t::evoker_t( sim_t* sim, std::string_view name, race_e r )
     gain(),
     proc(),
     rppm(),
-    uptime(),
-    close_as_clutchmates( false ),
-    allies_with_my_ebon(),
-    allied_ebons_on_me(),
-    allied_augmentations(),
-    allied_ebon_callbacks(),
-    last_scales_target( nullptr ),
-    heartbeat(),
-    allies_with_my_prescience(),
-    naszuro()
+    uptime()
 {
   cooldown.eternity_surge = get_cooldown( "eternity_surge" );
   cooldown.fire_breath    = get_cooldown( "fire_breath" );
@@ -4166,6 +4367,25 @@ void insight_of_naszuro( special_effect_t& effect )
   }
 }
 
+unsigned int evoker_t::specialization_aura_id()
+{
+  switch ( specialization() )
+  {
+    case EVOKER_DEVASTATION:
+      return spec.devastation->id();
+      break;
+    case EVOKER_PRESERVATION:
+      return spec.preservation->id();
+      break;
+    case EVOKER_AUGMENTATION:
+      return spec.augmentation->id();
+      break;
+    default:
+      return 356816;
+      break;
+  }
+}
+
 void evoker_t::init_action_list()
 {
   // 2022-08-07: Healing is not supported
@@ -4219,6 +4439,7 @@ void evoker_t::init_finished()
   if ( sim->player_no_pet_list.size() <= 5 )
   {
     close_as_clutchmates = true;
+    sim->print_debug( "{} Activating Close As Clutchmates", *this );
   }
 
   player_t::init_finished();
@@ -4311,6 +4532,7 @@ void evoker_t::init_gains()
 
   gain.eye_of_infinity      = get_gain( "Eye of Infinity" );
   gain.roar_of_exhilaration = get_gain( "Roar of Exhilaration" );
+  gain.energizing_flame = get_gain( "Energizing Flame" );
 }
 
 void evoker_t::init_procs()
@@ -4534,6 +4756,8 @@ void evoker_t::init_spells()
   spec.mastery              = find_mastery_spell( specialization() );
   spec.living_flame_damage  = find_spell( 361500 );
   spec.living_flame_heal    = find_spell( 361509 );
+  spec.energizing_flame     = find_spell( 400006 );
+  spec.tempered_scales      = find_spell( 396571 );
   spec.emerald_blossom      = find_spell( 355913 );
   spec.emerald_blossom_heal = find_spell( 355916 );
   spec.emerald_blossom_spec = find_specialization_spell( 365261, specialization() );
@@ -4774,18 +4998,11 @@ void evoker_t::reset()
 {
   player_t::reset();
 
+  // clear runtime variables
+  allies_with_my_ebon.clear_without_callbacks();
+  allies_with_my_prescience.clear_without_callbacks();
   allied_ebons_on_me.clear();
-  for ( auto ally : allies_with_my_ebon )
-  {
-    allies_with_my_ebon.find_and_erase_unordered( ally );
-  }
-
-  for ( auto ally : allies_with_my_prescience )
-  {
-    allies_with_my_prescience.find_and_erase_unordered( ally );
-  }
-
-
+  last_scales_target = nullptr;
   was_empowering = false;
 }
 
@@ -4982,12 +5199,29 @@ double evoker_t::matching_gear_multiplier( attribute_e attr ) const
   return attr == ATTR_INTELLECT ? 0.05 : 0.0;
 }
 
+double evoker_t::composite_base_armor_multiplier() const
+{
+  double a = player_t::composite_base_armor_multiplier();
+
+  if ( spec.tempered_scales )
+    a *= 1.0 + spec.tempered_scales->effectN( 1 ).percent();
+
+  return a;
+}
+
 double evoker_t::composite_armor() const
 {
   double a = player_t::composite_armor();
 
-  if ( buff.obsidian_scales->check() )
-    a *= 1.0 + buff.obsidian_scales->data().effectN( 1 ).percent();
+  return a;
+}
+
+double evoker_t::composite_base_armor() const
+{
+  double a = current.stats.armor;
+
+  a *= composite_base_armor_multiplier();
+  a *= composite_armor_multiplier();
 
   return a;
 }
@@ -5221,6 +5455,18 @@ struct evoker_module_t : public module_t
   void combat_begin( sim_t* ) const override
   {
   }
+
+  void create_actions( player_t* p ) const override
+  {
+    if ( p->is_enemy() || p->type == HEALING_ENEMY || p->is_pet() )
+      return;
+
+    new spells::infernos_blessing_t( p );
+    new spells::blistering_scales_damage_t( p );
+    new spells::fate_mirror_damage_t( p );
+    new spells::breath_of_eons_damage_t( p );
+  }
+
 
   void combat_end( sim_t* ) const override
   {

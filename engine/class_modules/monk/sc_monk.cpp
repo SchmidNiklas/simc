@@ -77,6 +77,8 @@ namespace monk
       bool trigger_faeline_stomp;
       // Whether the ability can be used during Spinning Crane Kick
       bool cast_during_sck;
+      // Whether the ability is on the PTA whitelist
+      bool press_the_advantage_whitelist;
 
       // Keefer's Skyreach trigger
       proc_t *keefers_skyreach_proc;
@@ -102,6 +104,7 @@ namespace monk
         trigger_chiji( false ),
         trigger_faeline_stomp( false ),
         cast_during_sck( false ),
+        press_the_advantage_whitelist( false ),
         keefers_skyreach_proc( nullptr ),
         affected_by()
       {
@@ -150,7 +153,7 @@ namespace monk
         //    parse_buff_effects( p()->buff.hit_scheme );
         //    parse_buff_effects( p()->buff.mighty_pour );
         //    parse_buff_effects( p()->buff.purified_chi );
-        parse_buff_effects( p()->buff.press_the_advantage );
+        // parse_buff_effects( p()->buff.press_the_advantage );
         // Mistweaver
         parse_buff_effects( p()->buff.invoke_chiji_evm, true, true );
         parse_buff_effects( p()->buff.lifecycles_enveloping_mist );
@@ -787,6 +790,9 @@ namespace monk
       {
         double am = base_t::action_multiplier();
 
+        if ( press_the_advantage_whitelist )
+          am *= 1.0 + p()->buff.press_the_advantage->check_stack_value();
+
         // Storm, Earth, and Fire
         if ( p()->buff.storm_earth_and_fire->check() && p()->affected_by_sef( base_t::data() ) )
           am *= 1 + p()->talent.windwalker.storm_earth_and_fire->effectN( 1 ).percent();
@@ -1097,6 +1103,9 @@ namespace monk
         {
           double am = base_t::action_multiplier();
 
+          if ( press_the_advantage_whitelist )
+            am *= 1.0 + p()->buff.press_the_advantage->check_stack_value();
+
           if ( ww_mastery && p()->buff.combo_strikes->check() )
             am *= 1 + p()->cache.mastery_value();
 
@@ -1289,6 +1298,7 @@ namespace monk
           hasted_ticks = false;
           may_crit = tick_may_crit = true;
           target = player;
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -1317,6 +1327,7 @@ namespace monk
           aoe = 1;
           attack_power_mod.direct = 0;
           attack_power_mod.tick = data().effectN( 2 ).ap_coeff();
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -1361,6 +1372,7 @@ namespace monk
           trigger_faeline_stomp = true;
           sef_ability = sef_ability_e::SEF_TIGER_PALM;
           cast_during_sck = true;
+          press_the_advantage_whitelist = true;
 
           if ( !p->talent.brewmaster.press_the_advantage->ok() )
           {
@@ -1597,6 +1609,7 @@ namespace monk
 
           if ( p->specialization() == MONK_WINDWALKER || p->specialization() == MONK_BREWMASTER )
             apply_dual_wield_two_handed_scaling();
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -1770,8 +1783,8 @@ namespace monk
 
           if ( p()->buff.press_the_advantage->stack() == 10 )
           {
-            p()->buff.press_the_advantage->expire();
             p()->active_actions.rising_sun_kick_press_the_advantage->execute();
+            p()->buff.press_the_advantage->expire();
           }
         }
       };
@@ -1802,13 +1815,13 @@ namespace monk
           double am = rising_sun_kick_dmg_t::action_multiplier();
 
           if ( face_palm )
-            am *= p()->talent.brewmaster.face_palm->effectN( 2 ).percent();
+            am *= 1.0 + ( p()->talent.brewmaster.face_palm->effectN( 2 ).percent() - 1) * 0.1;
 
           if ( blackout_combo )
-            am *= 1.0 + p()->buff.blackout_combo->data().effectN( 1 ).percent() * 0.5;
+            am *= 1.0 + p()->buff.blackout_combo->data().effectN( 1 ).percent() * 0.1;
 
           if ( counterstrike )
-            am *= 1.0 + p()->buff.counterstrike->data().effectN( 1 ).percent() * 0.5;
+            am *= 1.0 + p()->buff.counterstrike->data().effectN( 1 ).percent() * 0.1;
 
           return am;
         }
@@ -2018,6 +2031,7 @@ namespace monk
           trigger_chiji = true;
           trigger_faeline_stomp = true;
           cast_during_sck = true;
+          press_the_advantage_whitelist = true;
 
           aoe = 1 + ( int )p->shared.shadowboxing_treads->effectN( 1 ).base_value();
           cooldown->duration += p->talent.brewmaster.fluidity_of_motion->effectN( 1 ).time_value();
@@ -2233,6 +2247,7 @@ namespace monk
           // Reset some variables to ensure proper execution
           dot_duration = timespan_t::zero();
           cooldown->duration = timespan_t::zero();
+          press_the_advantage_whitelist = true;
         }
       };
 
@@ -2333,6 +2348,7 @@ namespace monk
           school = SCHOOL_PHYSICAL;
           cooldown->duration = timespan_t::zero();
           base_costs[RESOURCE_ENERGY] = 0;
+          press_the_advantage_whitelist = true;
         }
 
         int motc_counter() const
@@ -3008,13 +3024,7 @@ namespace monk
 
           if ( p()->talent.brewmaster.press_the_advantage->ok() && p()->talent.brewmaster.chi_surge->ok() )
             add_child( p()->active_actions.chi_surge );
-        }
-
-        virtual void execute() override
-        {
-          p()->buff.press_the_advantage->trigger();
-
-          monk_spell_t::execute();
+          press_the_advantage_whitelist = true;
         }
       };
 
@@ -3086,23 +3096,30 @@ namespace monk
         {
           monk_melee_attack_t::impact( s );
 
+          // Press the Advantage can trigger from any Main Hand swing; whether miss, dodge, parry or hit.
+          if ( p()->talent.brewmaster.press_the_advantage->ok() && weapon->slot == SLOT_MAIN_HAND)
+          {
+            // Reduce Brew cooldown by 0.5 seconds
+            brew_cooldown_reduction( p()->talent.brewmaster.press_the_advantage->effectN( 2 ).base_value() / 1000 );
+
+            p()->buff.press_the_advantage->trigger();
+            // Trigger the Press the Advantage damage proc
+            p()->passive_actions.press_the_advantage->target = s->target;
+            p()->passive_actions.press_the_advantage->schedule_execute();
+          }
+
           if ( result_is_hit( s->result ) )
           {
+            if ( p()->talent.brewmaster.press_the_advantage->ok() && p()->bugs )
+            {
+              p()->passive_actions.press_the_advantage->target = s->target;
+              p()->passive_actions.press_the_advantage->schedule_execute();
+            }
 
             if ( p()->buff.thunderfist->up() )
             {
               p()->passive_actions.thunderfist->target = s->target;
               p()->passive_actions.thunderfist->schedule_execute();
-            }
-
-            if ( p()->talent.brewmaster.press_the_advantage->ok() )
-            {
-              // Reduce Brew cooldown by 0.5 seconds
-              brew_cooldown_reduction( p()->talent.brewmaster.press_the_advantage->effectN( 2 ).base_value() / 1000 );
-
-              // Trigger the Press the Advantage damage proc
-              p()->passive_actions.press_the_advantage->target = s->target;
-              p()->passive_actions.press_the_advantage->schedule_execute();
             }
           }
         }
@@ -3164,8 +3181,11 @@ namespace monk
       // ==========================================================================
       struct keg_smash_t : public monk_melee_attack_t
       {
+        bool is_base_ks;
+
         keg_smash_t( monk_t *p, util::string_view options_str, util::string_view name = "keg_smash" )
-          : monk_melee_attack_t( name, p, p->talent.brewmaster.keg_smash )
+          : monk_melee_attack_t( name, p, p->talent.brewmaster.keg_smash ),
+            is_base_ks( false )
         {
           parse_options( options_str );
 
@@ -3185,6 +3205,8 @@ namespace monk
           // Keg Smash does not appear to be picking up the baseline Trigger GCD reduction
           // Forcing the trigger GCD to 1 second.
           trigger_gcd = timespan_t::from_seconds( 1 );
+          press_the_advantage_whitelist = true;
+          is_base_ks = true;
 
           // The extra name requirement is only necessary due to keg_smash_press_the_advantage_t
           // being derived from keg_smash_t. Causes segmentation faults without the additional restriction.
@@ -3210,6 +3232,9 @@ namespace monk
 
           am *= 1 + p()->buff.hit_scheme->check_value();
 
+          if ( p()->buff.blackout_combo->check() )
+            am *= 1.0 + p()->buff.blackout_combo->data().effectN( 1 ).percent() * 0.1;
+
           return am;
         }
 
@@ -3218,7 +3243,7 @@ namespace monk
 
           monk_melee_attack_t::execute();
 
-          if ( p()->talent.brewmaster.salsalabims_strength->ok() )
+          if ( p()->talent.brewmaster.salsalabims_strength->ok() && is_base_ks )
           {
             p()->cooldown.breath_of_fire->reset( true, 1 );
             p()->proc.salsalabim_bof_reset->occur();
@@ -3232,16 +3257,19 @@ namespace monk
           {
             time_reduction += p()->buff.blackout_combo->data().effectN( 3 ).base_value();
             p()->proc.blackout_combo_keg_smash->occur();
-            p()->buff.blackout_combo->expire();
           }
+
+          if ( !p()->talent.brewmaster.press_the_advantage->ok() )
+            p()->buff.blackout_combo->expire();
 
           if ( p()->buff.press_the_advantage->stack() == 10 )
           {
-            p()->buff.press_the_advantage->expire();
             p()->active_actions.keg_smash_press_the_advantage->execute();
+            p()->buff.press_the_advantage->expire();
           }
 
-          trigger_shuffle( p()->talent.brewmaster.keg_smash->effectN( 6 ).base_value() );
+          if ( is_base_ks )
+            trigger_shuffle( p()->talent.brewmaster.keg_smash->effectN( 6 ).base_value() );
 
           brew_cooldown_reduction( time_reduction );
         }
@@ -3292,6 +3320,7 @@ namespace monk
           trigger_gcd = 0_s;
           background = dual = true;
           proc = true;
+          is_base_ks = false;
         }
 
         double action_multiplier() const override
@@ -3299,13 +3328,15 @@ namespace monk
           double am = keg_smash_t::action_multiplier();
 
           if ( face_palm )
-            am *= p()->talent.brewmaster.face_palm->effectN( 2 ).percent();
+            am *= 1.0 + ( p()->talent.brewmaster.face_palm->effectN( 2 ).percent() - 1) * 0.1;
 
-          if ( blackout_combo )
-            am *= 1.0 + p()->buff.blackout_combo->data().effectN( 1 ).percent() * 0.5;
+
+          // TODO: if bug removed from parent ks, remove !p()->bugs
+          if ( blackout_combo && !p()->bugs )
+            am *= 1.0 + p()->buff.blackout_combo->data().effectN( 1 ).percent() * 0.1;
 
           if ( counterstrike )
-            am *= 1.0 + p()->buff.counterstrike->data().effectN( 1 ).percent() * 0.5;
+            am *= 1.0 + p()->buff.counterstrike->data().effectN( 1 ).percent() * 0.1;
 
           return am;
         }
@@ -3316,10 +3347,11 @@ namespace monk
           blackout_combo = p()->buff.blackout_combo->up();
           counterstrike = p()->buff.counterstrike->up();
 
-          keg_smash_t::execute();
-
           p()->buff.counterstrike->expire();
           p()->buff.blackout_combo->expire();
+
+          keg_smash_t::execute();
+
 
           if ( p()->talent.brewmaster.chi_surge->ok() )
             p()->active_actions.chi_surge->execute();
@@ -3741,6 +3773,7 @@ namespace monk
           background = true;
           aoe = -1;
           reduced_aoe_targets = 5;
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -3775,6 +3808,7 @@ namespace monk
           aoe = -1;
           attack_power_mod.direct = data().effectN( 1 ).ap_coeff();
           radius = data().effectN( 1 ).radius();
+          press_the_advantage_whitelist = true;
         }
 
         timespan_t travel_time() const override
@@ -3928,6 +3962,7 @@ namespace monk
           // Forcing the minimum GCD to 750 milliseconds for all 3 specs
           min_gcd = timespan_t::from_millis( 750 );
           gcd_type = gcd_haste_type::SPELL_HASTE;
+          press_the_advantage_whitelist = true;
 
         }
 
@@ -4054,6 +4089,7 @@ namespace monk
           full_amount_targets    = 1;
           trigger_faeline_stomp = true;
           cast_during_sck = true;
+          press_the_advantage_whitelist = true;
 
           add_child( p.active_actions.breath_of_fire );
         }
@@ -4176,6 +4212,7 @@ namespace monk
         {
           background = dual = true;
           proc = true;
+          press_the_advantage_whitelist = true;
         }
       };
 
@@ -4194,6 +4231,7 @@ namespace monk
           gcd_type       = gcd_haste_type::NONE;
 
           add_child( p.active_actions.exploding_keg );
+          press_the_advantage_whitelist = true;
         }
 
         timespan_t travel_time() const override
@@ -4906,6 +4944,17 @@ namespace monk
           school = SCHOOL_NATURE;
 
           spell_power_mod.tick = 2 * data().effectN( 2 ).base_value() / 100; // Saved as 45, is really 90
+          press_the_advantage_whitelist = true;
+        }
+
+        double action_multiplier() const override
+        {
+          double am = monk_spell_t::action_multiplier();
+
+          if ( p()->talent.brewmaster.press_the_advantage->ok() )
+            am *= 1 + p()->talent.brewmaster.press_the_advantage->effectN( 5 ).percent();
+
+          return am;
         }
 
         double composite_spell_power() const override
@@ -5930,6 +5979,7 @@ namespace monk
           ww_mastery = true;
           attack_power_mod.direct = player->passives.chi_wave_damage->effectN( 1 ).ap_coeff();
           attack_power_mod.tick = 0;
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -6002,6 +6052,7 @@ namespace monk
           aoe = ( p()->user_options.chi_burst_healing_targets > 1 ? 1 : -1 );
           reduced_aoe_targets =
             ( p()->user_options.chi_burst_healing_targets > 1 ? 0.0 : p()->talent.general.chi_burst->effectN( 1 ).base_value() );
+          press_the_advantage_whitelist = true;
         }
 
         double action_multiplier() const override
@@ -6371,10 +6422,8 @@ namespace monk
         {
           // The tooltip is hard-coded with 20% if Brewmaster Rank 2 is activated
           // Currently it's bugged and giving 17.39% HP instead of the intended 20%
-          // The intended calculation is:
-          // health_multiplier = ( 1 + health_multiplier ) * p().passives.fortifying_brew->effectN( 5 ).percent() * ( 1 / (
-          // 1 + health_multiplier ) );
-          health_multiplier = ( p().bugs ? 0.1739 : 0.2 );  // p().passives.fortifying_brew->effectN( 5 ).percent() * ( 1 / ( 1 + health_multiplier ) );
+          // This if fixed on PTR
+          health_multiplier = ( !p().is_ptr() ? 0.1739 : p().passives.fortifying_brew->effectN( 6 ).percent() );
         }
 
         // Extra Health is set by current max_health, doesn't change when max_health changes.
@@ -10289,7 +10338,6 @@ namespace monk
       // Add bugs / issues with sims here:
       ReportIssue( "Faeline Stomp WW damage hits 6 targets ( Tooltip: 5 )", "2023-02-21", true );
       ReportIssue( "Fortifying Brew provides 20% HP ( Tooltip: 15% )", "2023-02-21", true );
-      ReportIssue( "Fortifying Brew: Determination provides 17.39% HP ( Tooltip: 20% )", "2023-02-21", true );
       ReportIssue( "Xuen's Bond is triggering from SEF combo strikes", "2023-02-21", true );
       ReportIssue( "Jade Ignition is reduced by SEF but not copied", "2023-02-22", true );
       ReportIssue( "Blackout Combo buffs both the initial and periodic effect of Breath of Fire", "2023-03-08", true );

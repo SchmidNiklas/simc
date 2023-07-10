@@ -37,6 +37,11 @@ struct holy_fire_t;
 struct burning_vehemence_t;
 }  // namespace actions::spells
 
+namespace actions::heals
+{
+struct essence_devourer_t;
+}  // namespace actions::heals
+
 /**
  * Priest target data
  * Contains target specific things
@@ -97,6 +102,7 @@ public:
     propagate_const<buff_t*> desperate_prayer;
     absorb_buff_t* power_word_shield;
     propagate_const<buff_t*> fade;
+    propagate_const<buff_t*> levitate;
 
     // Talents
     propagate_const<buff_t*> twist_of_fate;
@@ -245,8 +251,12 @@ public:
     player_talent_t improved_fade;
     player_talent_t manipulation;
     // Row 10
+    player_talent_t benevolence;
     player_talent_t power_word_life;
     player_talent_t angelic_bulwark;
+    player_talent_t essence_devourer;
+    const spell_data_t* essence_devourer_shadowfiend;
+    const spell_data_t* essence_devourer_mindbender;
     player_talent_t void_shift;
     player_talent_t shattered_perceptions;
 
@@ -546,6 +556,7 @@ public:
     propagate_const<action_t*> searing_light;
     propagate_const<action_t*> light_eruption;
     propagate_const<actions::spells::burning_vehemence_t*> burning_vehemence;
+    propagate_const<actions::heals::essence_devourer_t*> essence_devourer;
   } background_actions;
 
   // Items
@@ -568,9 +579,6 @@ public:
   // Options
   struct
   {
-    bool autoUnshift = true;  // Shift automatically out of stance/form
-    bool fixed_time  = true;
-
     // Default param to set if you should cast Power Infusion on yourself
     bool self_power_infusion = true;
 
@@ -583,8 +591,9 @@ public:
     // Time in seconds between prayer of mending bounces
     double prayer_of_mending_bounce_rate = 2;
 
-    // Void Lasher re-target on demise bug
-    bool void_lasher_retarget = false;
+    // Option whether or not to start with higher than 0 Insanity based on talents
+    // Only takes into account if you have not overriden initial_resource=insanity=X to something greater than 0
+    bool init_insanity = true;
   } options;
 
   priest_t( sim_t* sim, util::string_view name, race_e r );
@@ -618,6 +627,7 @@ public:
   double composite_player_heal_multiplier( const action_state_t* s ) const override;
   double composite_player_multiplier( school_e school ) const override;
   double composite_player_target_multiplier( player_t* t, school_e school ) const override;
+  double composite_leech() const override;
   double matching_gear_multiplier( attribute_e attr ) const override;
   void target_mitigation( school_e, result_amount_type, action_state_t* ) override;
   void init_action_list() override;
@@ -680,6 +690,7 @@ public:
   void trigger_idol_of_nzoth( player_t* target, proc_t* proc );
   int shadow_weaving_active_dots( const player_t* target, const unsigned int spell_id ) const;
   double shadow_weaving_multiplier( const player_t* target, const unsigned int spell_id ) const;
+  void trigger_essence_devourer();
 
   std::string default_potion() const override;
   std::string default_flask() const override;
@@ -1003,7 +1014,7 @@ struct priest_spell_t : public priest_action_t<spell_t>
         priest().buffs.twilight_equilibrium_holy_amp->trigger();
         priest().buffs.twilight_equilibrium_shadow_amp->expire();
       }
-      // Holy and Radiant (holyfire) applies this buff
+      // Holy and Radiant (SCHOOL_HOLYFIRE) applies this buff
       // Non-harmful actions don't apply this buff
       if ( ( this->school == SCHOOL_HOLY || this->school == SCHOOL_HOLYFIRE ) && this->harmful == true )
       {

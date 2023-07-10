@@ -1303,7 +1303,7 @@ player_t::player_t( sim_t* s, player_e t, util::string_view n, race_e r )
 
   if ( !is_pet() && !is_enemy() )
   {
-    sim->register_heartbeat_event_callback( [ this ]( sim_t* sim ) {
+    sim->register_heartbeat_event_callback( [ this ]( sim_t* ) {
       for ( auto& pet : active_pets )
       {
         pet->update_stats();
@@ -2522,7 +2522,7 @@ static bool generate_tree_nodes( player_t* player,
 // Different entries within the same node are allowed to have non-unique selection indices. Every new build, it seems
 // random which node becomes the first choice. Manually resolve such conflicts here.
 // ***THIS WILL NEED TO BE CONFIRMED AND UPDATED EVERY NEW BUILD***
-static bool sort_node_entries( const trait_data_t* a, const trait_data_t* b, bool is_ptr )
+static bool sort_node_entries( const trait_data_t* a, const trait_data_t* b, bool /* is_ptr */ )
 {
   auto get_index = [ /* is_ptr */ ]( const trait_data_t* t ) -> short {
     return t->selection_index;
@@ -3197,13 +3197,9 @@ void player_t::init_background_actions()
 {
   if ( !is_enemy() )
   {
-    const spell_data_t* s = find_mastery_spell( specialization() );
-    if ( s->ok() )
-      _mastery = &( s->effectN( 1 ) );
-
-    if (record_healing())
+    if ( record_healing() )
     {
-      spells.leech = new leech_t(this);
+      spells.leech = new leech_t( this );
     }
   }
 }
@@ -11577,7 +11573,7 @@ std::unique_ptr<expr_t> player_t::create_expression( util::string_view expressio
       get_target_data( this );
       buff_t* buff = buff_t::find_expressable( buff_list, splits[ 1 ], this );
       if ( !buff )
-        buff = buff_t::find( this, splits[ 1 ], this );  // Raid debuffs
+        buff = buff_t::find( this, splits[ 1 ], this );  // Raid debuffs & fallback buffs
       if ( buff )
         return buff_t::create_expression( splits[ 1 ], splits[ 2 ], *buff );
       throw std::invalid_argument(fmt::format("Cannot find buff '{}'.", splits[ 1 ]));
@@ -12767,6 +12763,7 @@ void player_t::create_options()
   add_option( opt_string( "dragonflight.flowstone_starting_state", dragonflight_opts.flowstone_starting_state ) );
   add_option( opt_string( "dragonflight.spoils_of_neltharus_initial_type", dragonflight_opts.spoils_of_neltharus_initial_type ) );
   add_option( opt_float( "dragonflight.igneous_flowstone_double_lava_wave_chance", dragonflight_opts.igneous_flowstone_double_lava_wave_chance ) );
+  add_option( opt_bool( "dragonflight.voice_of_the_silent_star_enable", dragonflight_opts.voice_of_the_silent_star_enable ) );
 
   // Obsolete options
 
