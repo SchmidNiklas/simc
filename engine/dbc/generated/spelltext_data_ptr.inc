@@ -1,5 +1,5 @@
-// Spell text, wow build 10.1.5.50232
-static const std::array<spelltext_data_t, 20108> __ptr_spelltext_data { {
+// Spell text, wow build 10.1.5.50379
+static const std::array<spelltext_data_t, 20109> __ptr_spelltext_data { {
   {     17, "Shields an ally for $d, absorbing $<shield> damage.", "Absorbs $w1 damage.", 0 },
   {     53, "Stab the target, causing ${$s2*$<mult>} Physical damage. Damage increased by $s4% when you are behind your target$?s319949[, and critical strikes apply Find Weakness for $319949s1 sec][].\r\n\r\n|cFFFFFFFFAwards $s3 combo $lpoint:points;.|r", 0, 0 },
   {     56, "Stuns target for $d.", "Stunned.", 0 },
@@ -20018,8 +20018,9 @@ static const std::array<spelltext_data_t, 20108> __ptr_spelltext_data { {
   { 415246, "$@spelldesc415244", "Restoring $s3 Mana every $t3 sec, but your healing and damage is decreased by $s1%.", 0 },
   { 415284, "Your harmful spells and abilities have a chance to conjure a cyclone at your current target's location. The cyclone follows the initial target dealing ${$s1* ($415339d/$s4)} Nature damage over $415339d split between all enemies.\r\n\r\nWhile inside the cyclone, enemies become Lightning Conduits. Dealing damage to a Lightning Conduit has a high chance to unleash a bolt of forked lighting, dealing $s2 Nature damage split between them and up to $s3 additional nearby targets.", 0, 0 },
   { 415299, "$@spelldesc414720", 0, 0 },
-  { 415339, "$@spelldesk415284", 0, 0 },
+  { 415339, "$@spelldesc415284", "Suffering $w1 Nature damage every 1 sec split between all nearby enemies.", 0 },
   { 415364, "Holy Shock and Crusader Strike refund up to $s1% of their Mana cost and deal up to $s2% more healing or damage, based on the target's missing health.", 0, 0 },
+  { 415395, "$@spelldesc415284", 0, 0 },
   { 415416, "Increases the healing of your spells by $s1%.", 0, 0 },
   { 415446, "Your healing spells and abilities have a chance to fire a Healing Dart toward an ally target. The first ally hit will be healed for $s1.", 0, 0 },
   { 415479, "Attacks from your Shadowfiend siphon life from enemies, healing a nearby injured ally for $415673s1.$?a137031[][\r\n\r\nAttacks from your Mindbender siphon life from enemies, healing a nearby injured ally for $415676s1.]", 0, 0 },
@@ -20110,14 +20111,16 @@ static const std::array<spelltext_data_t, 20108> __ptr_spelltext_data { {
   { 419800, "$@spelldesc416714", 0, 0 },
 } };
 
-// spelltext hotfix entries, wow build 10.1.5.50232
-static constexpr std::array<hotfix::client_hotfix_entry_t, 3> __ptr_spelltext_hotfix_data { {
+// spelltext hotfix entries, wow build 10.1.5.50379
+static constexpr std::array<hotfix::client_hotfix_entry_t, 5> __ptr_spelltext_hotfix_data { {
   {   56377,  0, "Your Ice Lance and Icicles now deal $s3% increased damage, and hit a second nearby target for $s2% of their damage.\r\n\r\nYour Ebonbolt and Glacial Spike also hit a second nearby target for $s4% of its damage.", "Your Ice Lance and Icicles now deal $s3% increased damage, and hit a second nearby target for $s2% of their damage.\r\n\r\nYour Glacial Spike also hits a second nearby target for $s4% of its damage." },
+  {  415339,  0, "$@spelldesk415284", "$@spelldesc415284" },
+  {  415339,  1, nullptr, "Suffering $w1 Nature damage every 1 sec split between all nearby enemies." },
   {  419262,  0, nullptr, "Striking a demon with melee abilities has a chance to rend their flesh, dealing Physical damage over $d." },
   {  419268,  0, nullptr, "Striking an undead with a melee ability has a chance to smite them with righteous fury, dealing Holy damage." },
 } };
 
-// Spell description variables, wow build 10.1.5.50232
+// Spell description variables, wow build 10.1.5.50379
 static const std::array<spelldesc_vars_data_t, 395> __ptr_spelldesc_vars_data { {
   {      17, "$rapture=$?a47536[${(1+$47536s1/100)}][${1}]\r\n$shadow=$?a137033[${1.25}][${1}]\r\n$disc=$?a137032[${1.25}][${1}]\r\n$pvp=$?a134735[${1}][${1}]\r\n$shadowinpvp=$?a134735&a137033[${0.8}][${1}]\r\n$discinpvp=$?a134735&a137032[${0.85}][${1}]\r\n$weal=$?a390787[${1+$390787s2/100}][${1}]\r\n$benevolence=$?a415416[${1+$415416s1/100}][${1}]\r\n$shield=${$SP*3.36*(1+$@versadmg)*$<rapture>*$<shadow>*$<disc>*$<pvp>*$<weal>*$<shadowinpvp>*$<discinpvp>*$<benevolence>}" },
   {      53, "$mult=${($max(0,$min($pl-10,10))*11+260)/370}" },
@@ -20202,7 +20205,7 @@ static const std::array<spelldesc_vars_data_t, 395> __ptr_spelldesc_vars_data { 
   {  114014, "$CAP=$?$OWB==0[${$AP*0.98}][${($AP+$OAP)*2/3}]--2H, DW" },
   {  114165, "$healmod=$?a405546[${1+$405546s3/100}][${1}]" },
   {  115057, "$stnc=$?a103985[${1.05*(1+$@versadmg)}][${1.0*(1+$@versadmg)}]\r\n$dwm=$?a108561|a115697[${1}][${0.857143}]\r\n$offm=$?a108561|a115697[${0}][${1}]\r\n\r\n$offlow=$?s121278[${$mwb/2/$mws}][${$owb/2/$ows}]\r\n$offhigh=$?s121278[${$MWB/2/$mws}][${$OWB/2/$ows}]\r\n\r\n$low=${$<stnc>*($<dwm>*(($mwb)/($MWS)+$<offm>*$<offlow>)+$AP/3.5-1)}\r\n$high=${$<stnc>*($<dwm>*(($MWB)/($MWS)+$<offm>*$<offhigh>)+$AP/3.5+1)}\r\n" },
-  {  115203, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]" },
+  {  115203, "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
   {  116670, "$healing=$?c2[${$s1*1.5}][${$s1}]" },
   {  116847, "$stnc=$?a103985[${1.05*(1+$@versadmg)}][${1.0*(1+$@versadmg)}]\r\n$dwm=$?a108561|a115697[${1}][${0.857143}]\r\n$offm=$?a108561|a115697[${0}][${1}]\r\n\r\n$offlow=$?s121278[${$mwb/2/$mws}][${$owb/2/$ows}]\r\n$offhigh=$?s121278[${$MWB/2/$mws}][${$OWB/2/$ows}]\r\n\r\n$low=${$<stnc>*($<dwm>*(($mwb)/($MWS)+$<offm>*$<offlow>)+$AP/3.5-1)}\r\n$high=${$<stnc>*($<dwm>*(($MWB)/($MWS)+$<offm>*$<offhigh>)+$AP/3.5+1)}\r\n" },
   {  116849, "$shield=${($SP*11)*(1+$@versadmg)}\r\n$newshield=${$MHP*$s3/100*(1+$@versadmg)}" },
@@ -20212,7 +20215,7 @@ static const std::array<spelldesc_vars_data_t, 395> __ptr_spelldesc_vars_data { 
   {  120360, "$damageSec=${$120361sw2*11}" },
   {  120517, "$twilightshadowtoholy=$?a390706[${(1+$390706s1/100)}][${1}]\r\n$holyhalodamage=${$120696s1*$<twilightshadowtoholy>}" },
   {  120644, "$twilightholytoshadow=$?a390707[${(1+$390707s1/100)}][${1}]\r\n$shadowcov=$?a322105[${(1+$322105s1/100)}][${1}]\r\n$darkascension=$?a391109[${(1+$391109s1/100)}][${1}]\r\n$shadowhalodamage=${$390964s1*$<twilightholytoshadow>*$<shadowcov>*$<darkascension>}" },
-  {  120954, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]" },
+  {  120954, "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
   {  121253, "$stnc=$?a103985[${1.05*(1+$@versadmg)}][${1.0*(1+$@versadmg)}]\r\n$dwm=$?a108561|a115697[${1}][${0.857143}]\r\n$offm=$?a108561|a115697[${0}][${1}]\r\n\r\n$offlow=$?s121278[${$mwb/2/$mws}][${$owb/2/$ows}]\r\n$offhigh=$?s121278[${$MWB/2/$mws}][${$OWB/2/$ows}]\r\n\r\n$low=${$<stnc>*($<dwm>*(($mwb)/($MWS)+$<offm>*$<offlow>)+$AP/3.5-1)}\r\n$high=${$<stnc>*($<dwm>*(($MWB)/($MWS)+$<offm>*$<offhigh>)+$AP/3.5+1)}\r\n" },
   {  122121, "$twilightholytoshadow=$?a390707[${(1+$390707s1/100)}][${1}]\r\n$shadowcov=$?a322105[${(1+$322105s1/100)}][${1}]\r\n$darkascension=$?a391109[${(1+$391109s1/100)}][${1}]\r\n$shadowdstardamage=${$390845s1*$<twilightholytoshadow>*$<shadowcov>*$<darkascension>}" },
   {  123586, "$stnc=$?a103985[${1.05*(1+$@versadmg)}][${1.0*(1+$@versadmg)}]\r\n$dwm=$?a108561|a115697[${1}][${0.857143}]\r\n$offm=$?a108561|a115697[${0}][${1}]\r\n\r\n$offlow=$?s121278[${$mwb/2/$mws}][${$owb/2/$ows}]\r\n$offhigh=$?s121278[${$MWB/2/$mws}][${$OWB/2/$ows}]\r\n\r\n$low=${$<stnc>*($<dwm>*(($mwb)/($MWS)+$<offm>*$<offlow>)+$AP/3.5-1)}\r\n$high=${$<stnc>*($<dwm>*(($MWB)/($MWS)+$<offm>*$<offhigh>)+$AP/3.5+1)}\r\n" },
@@ -20489,7 +20492,7 @@ static const std::array<spelldesc_vars_data_t, 395> __ptr_spelldesc_vars_data { 
   {  388011, "$points=${($s2/100*$max($AP,$SP)*(1+$@versadmg))}" },
   {  388023, "$pvp=$?a134735[${2.55}][${1}]}\r\n$healing=[${$s1*$<pvp>}]" },
   {  388026, "$pvp=$?a134735[${2.45}][${1}]}\r\n$healing=[${$388023s1*$<pvp>}]" },
-  {  388917, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]" },
+  {  388917, "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
   {  389359, "$health=${5}\r\n$cdr=${10}" },
   {  389880, "$duration= ${$s1/1000}.1" },
   {  390236, "$mastery=$?s77515[${((100+$77515m1)/100)}][${1.00}]\r\n$damage=${0.44*($390220s1)*(1+$@versadmg)*$<mastery>}" },
@@ -20516,7 +20519,10 @@ static const std::array<spelldesc_vars_data_t, 395> __ptr_spelldesc_vars_data { 
   {  414661, "$shield=${$s2/100*$MHP*(1+$@versadmg)}" },
 } };
 
-// spelldesc_vars hotfix entries, wow build 10.1.5.50232
-static constexpr std::array<hotfix::client_hotfix_entry_t, 0> __ptr_spelldesc_vars_hotfix_data { {
+// spelldesc_vars hotfix entries, wow build 10.1.5.50379
+static constexpr std::array<hotfix::client_hotfix_entry_t, 3> __ptr_spelldesc_vars_hotfix_data { {
+  {  115203,  0, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]", "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
+  {  120954,  0, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]", "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
+  {  388917,  0, "$health=$?s322960[${20}][${20}]\r\n$damage=$?c1[${20}][${20}]", "$health=$?s322960[${20}][${20}]\r\n$pvp=$?a134735[${1.5}][${1}]\r\n$damage=$?c1[${20*$<pvp>}][${20*$<pvp>}]" },
 } };
 

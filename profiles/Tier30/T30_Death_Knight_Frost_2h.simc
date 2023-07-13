@@ -75,10 +75,10 @@ actions.breath+=/horn_of_winter,if=rune<2&runic_power.deficit>25
 actions.breath+=/obliterate,target_if=max:(debuff.razorice.stack+1)%(debuff.razorice.remains+1)*death_knight.runeforge.razorice,if=buff.killing_machine.react&!variable.frostscythe_priority
 actions.breath+=/frostscythe,if=buff.killing_machine.react&variable.frostscythe_priority
 actions.breath+=/frostscythe,if=variable.frostscythe_priority&runic_power>45
-actions.breath+=/obliterate,target_if=max:(debuff.razorice.stack+1)%(debuff.razorice.remains+1)*death_knight.runeforge.razorice,if=runic_power.deficit>40|buff.pillar_of_frost.up&runic_power.deficit>15
-actions.breath+=/death_and_decay,if=runic_power<32&rune.time_to_2>runic_power%16
-actions.breath+=/remorseless_winter,if=runic_power<32&rune.time_to_2>runic_power%16
-actions.breath+=/howling_blast,if=runic_power<32&rune.time_to_2>runic_power%16
+actions.breath+=/obliterate,target_if=max:(debuff.razorice.stack+1)%(debuff.razorice.remains+1)*death_knight.runeforge.razorice,if=runic_power.deficit>40|buff.pillar_of_frost.up&runic_power.deficit>17
+actions.breath+=/death_and_decay,if=runic_power<36&rune.time_to_2>runic_power%18
+actions.breath+=/remorseless_winter,if=runic_power<36&rune.time_to_2>runic_power%18
+actions.breath+=/howling_blast,if=runic_power<36&rune.time_to_2>runic_power%18
 actions.breath+=/obliterate,target_if=max:(debuff.razorice.stack+1)%(debuff.razorice.remains+1)*death_knight.runeforge.razorice,if=runic_power.deficit>25
 actions.breath+=/howling_blast,if=buff.rime.react
 actions.breath+=/arcane_torrent,if=runic_power<60
@@ -218,12 +218,12 @@ feet=spittleresistant_sollerets,id=204396,bonus_id=4800/4786/1498
 finger1=signet_of_titanic_insight,id=192999,bonus_id=8840/8836/8902/8783/8784/8780/1537/6935,gem_id=192922,enchant=devotion_of_mastery_3,crafted_stats=32/36
 finger2=ringbound_hourglass,id=193000,bonus_id=8840/8836/8902/8783/8784/8780/1537/6935,gem_id=192922,enchant=devotion_of_mastery_3,crafted_stats=49/36
 trinket1=neltharions_call_to_suffering,id=204211,bonus_id=4800/4786/1498
-trinket2=ominous_chromatic_essence,id=203729,bonus_id=4800/4786/1498
+trinket2=ominous_chromatic_essence,id=203729,bonus_id=4800/4786/1501
 main_hand=ashkandur_fall_of_the_brotherhood,id=202606,bonus_id=4800/4786/1498,enchant=rune_of_the_fallen_crusader
 
 # Gear Summary
-# gear_ilvl=448.93
-# gear_strength=6241
+# gear_ilvl=449.13
+# gear_strength=6257
 # gear_stamina=22545
 # gear_crit_rating=4179
 # gear_haste_rating=4818
